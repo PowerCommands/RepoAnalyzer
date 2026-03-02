@@ -1,0 +1,14 @@
+namespace RepoAnalyzer.Web.Models;
+
+public sealed class AnalyzeRun
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public string RepositoryId { get; set; } = string.Empty;
+    public string Status { get; set; } = "Queued";
+    public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public string? CurrentStep { get; set; }
+    public string? CurrentMessage { get; set; }
+    public int? ProgressPercent { get; set; }
+    public string? Error { get; set; }
+    public RepoAnalysisSnapshot? Snapshot { get; set; }
+}

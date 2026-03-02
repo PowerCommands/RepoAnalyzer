@@ -1,0 +1,1893 @@
+@page "/"
+@using System.Text.Json
+@inject InternalApiClient Api
+@inject IJSRuntime Js
+
+<PageTitle>Repo Analyzer</PageTitle>
+
+<MudText Typo="Typo.h4" Class="mb-4">Repo Analyzer</MudText>
+
+@if (!string.IsNullOrWhiteSpace(Error))
+{
+    <MudAlert Severity="Severity.Error" Dense="true" Class="mb-4">@Error</MudAlert>
+}
+
+@if (!string.IsNullOrWhiteSpace(InfoMessage))
+{
+    <MudAlert Severity="Severity.Info" Dense="true" Class="mb-4">@InfoMessage</MudAlert>
+}
+
+<MudTabs Rounded="true" PanelClass="pa-4" @bind-ActivePanelIndex="ActiveTabIndex">
+    <MudTabPanel Text="Dashboard">
+        <MudText Typo="Typo.h6">Repositories With Findings</MudText>
+        <MudTable Items="DashboardRows" Dense="true" Hover="true" Class="mt-3">
+            <HeaderContent>
+                <MudTh>Repository</MudTh>
+                <MudTh>Analyzed (UTC)</MudTh>
+                <MudTh>Vulnerabilities</MudTh>
+                <MudTh>Outdated</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>@context.RepositoryName</MudTd>
+                <MudTd>@context.AnalyzedAtUtc.ToString("u")</MudTd>
+                <MudTd>@context.VulnerabilityCount</MudTd>
+                <MudTd>@context.OutdatedCount</MudTd>
+            </RowTemplate>
+        </MudTable>
+    </MudTabPanel>
+
+    <MudTabPanel Text="Analyze">
+        <MudText Typo="Typo.h6">Run Analysis</MudText>
+        <MudGrid Class="mt-2">
+            <MudItem xs="12" md="4">
+                <MudSelect T="string" Value="AnalyzeConnectionId" ValueChanged="OnAnalyzeConnectionChanged" Label="Connection" Variant="Variant.Outlined">
+                    @foreach (var connection in Connections)
+                    {
+                        <MudSelectItem Value="@connection.Id">@connection.Name</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" md="6">
+                <MudSelect T="string" Value="AnalyzeRepositoryId" ValueChanged="OnAnalyzeRepositoryChanged" Label="Repository" Variant="Variant.Outlined">
+                    @foreach (var repo in AnalyzeRepositories)
+                    {
+                        <MudSelectItem Value="@repo.Id">@RepoSelectorLabel(repo)</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" md="2" Class="d-flex align-center gap-2">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="StartAnalyzeFromAnalyzeTab">Analyze</MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Error" Disabled="@(AnalyzeSnapshot is null || string.IsNullOrWhiteSpace(AnalyzeRepositoryId))" OnClick="DeleteAnalyzeSnapshotAsync">Delete result</MudButton>
+            </MudItem>
+        </MudGrid>
+
+        @if (CurrentAnalyzeRun is not null)
+        {
+            <MudPaper Class="pa-3 mt-3">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                    <MudText Typo="Typo.subtitle2">Status:</MudText>
+                    <MudChip Color="@RunStatusColor(CurrentAnalyzeRun.Status)">@CurrentAnalyzeRun.Status</MudChip>
+                    <MudText Typo="Typo.caption">Updated: @CurrentAnalyzeRun.UpdatedAtUtc.ToString("u")</MudText>
+                </MudStack>
+
+                @if (CurrentAnalyzeRun.Status is "Running" or "Queued")
+                {
+                    @if (CurrentAnalyzeRun.ProgressPercent.HasValue)
+                    {
+                        <MudProgressLinear Class="mt-2" Color="Color.Info" Value="@CurrentAnalyzeRun.ProgressPercent.Value" />
+                    }
+                    else
+                    {
+                        <MudProgressLinear Class="mt-2" Color="Color.Info" Indeterminate="true" />
+                    }
+                }
+
+                <MudText Typo="Typo.caption" Class="mt-1">@AnalyzeStatusText</MudText>
+
+                @if (!string.IsNullOrWhiteSpace(CurrentAnalyzeRun.Error))
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Error">@CurrentAnalyzeRun.Error</MudText>
+                }
+            </MudPaper>
+        }
+
+        @if (AnalyzeSnapshot is not null)
+        {
+            <MudExpansionPanels Class="mt-3">
+                <MudExpansionPanel Text="@AnalyzeRepoHeader(AnalyzeSnapshot)">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+                        <MudIcon Icon="@Icons.Material.Filled.Calculate" Size="Size.Small" />
+                        <MudText Typo="Typo.caption">@AnalyzeSnapshot.Components.Count</MudText>
+
+                        <MudIcon Icon="@Icons.Material.Filled.Event" Size="Size.Small" />
+                        <MudText Typo="Typo.caption">@AnalyzeSnapshot.Outdated.Count</MudText>
+
+                        <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Size="Size.Small" Style="color:#f1c40f" />
+                        <MudText Typo="Typo.caption">@SeverityCount(AnalyzeSnapshot, "Low")</MudText>
+
+                        <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Size="Size.Small" Style="color:#ff9800" />
+                        <MudText Typo="Typo.caption">@SeverityCount(AnalyzeSnapshot, "Medium")</MudText>
+
+                        <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Size="Size.Small" Style="color:#e74c3c" />
+                        <MudText Typo="Typo.caption">@SeverityCount(AnalyzeSnapshot, "High")</MudText>
+                    </MudStack>
+
+                    <MudText Typo="Typo.caption">Analyzed at: @AnalyzeSnapshot.AnalyzedAtUtc.ToString("u")</MudText>
+
+                    @foreach (var project in AnalyzeSnapshot.DetectedProjects)
+                    {
+                        var projectFindings = AnalyzeSnapshot.Vulnerabilities.Concat(AnalyzeSnapshot.Outdated).Where(f => f.ProjectId == project.Id).ToList();
+                        var projectComponents = AnalyzeSnapshot.Components.Where(c => c.ProjectId == project.Id).ToList();
+                        <MudExpansionPanels Class="mt-3">
+                            <MudExpansionPanel Text="@ProjectHeader(project, AnalyzeSnapshot)">
+                                <MudText Typo="Typo.caption">Type: @project.ProjectType | Framework: @project.Framework | Version: @project.Version | Language: @project.Language</MudText>
+                                <MudText Typo="Typo.caption">Path: @project.Path</MudText>
+
+                                <MudText Typo="Typo.subtitle2" Class="mt-2">Components</MudText>
+                                <MudTable Items="projectComponents" Dense="true" RowStyleFunc="@((Component item, int _) => ComponentRowStyle(item, projectFindings))">
+                                    <HeaderContent>
+                                        <MudTh>Status</MudTh>
+                                        <MudTh>Ecosystem</MudTh>
+                                        <MudTh>Name</MudTh>
+                                        <MudTh>Version</MudTh>
+                                        <MudTh>Path</MudTh>
+                                    </HeaderContent>
+                                    <RowTemplate>
+                                        <MudTd>@ComponentStatus(context, projectFindings)</MudTd>
+                                        <MudTd>@context.Ecosystem</MudTd>
+                                        <MudTd>@context.Name</MudTd>
+                                        <MudTd>@context.Version</MudTd>
+                                        <MudTd>@context.Path</MudTd>
+                                    </RowTemplate>
+                                </MudTable>
+
+                                <MudText Typo="Typo.subtitle2" Class="mt-2">Findings</MudText>
+                                <MudTable Items="projectFindings" Dense="true">
+                                    <HeaderContent>
+                                        <MudTh>Type</MudTh>
+                                        <MudTh>Package</MudTh>
+                                        <MudTh>Installed</MudTh>
+                                        <MudTh>Fixed</MudTh>
+                                        <MudTh>Severity</MudTh>
+                                        <MudTh>Guidance</MudTh>
+                                        <MudTh>Tool</MudTh>
+                                    </HeaderContent>
+                                    <RowTemplate>
+                                        <MudTd>@context.Type</MudTd>
+                                        <MudTd>@context.PackageName</MudTd>
+                                        <MudTd>@context.InstalledVersion</MudTd>
+                                        <MudTd>@context.FixedVersion</MudTd>
+                                        <MudTd>@context.Severity</MudTd>
+                                        <MudTd>@context.Advisory</MudTd>
+                                        <MudTd>@context.SourceTool</MudTd>
+                                    </RowTemplate>
+                                </MudTable>
+                            </MudExpansionPanel>
+                        </MudExpansionPanels>
+                    }
+                </MudExpansionPanel>
+            </MudExpansionPanels>
+        }
+    </MudTabPanel>
+
+    <MudTabPanel Text="Repos">
+        <MudText Typo="Typo.h6">Connection -> Workspace -> Repository</MudText>
+        <MudGrid Class="mt-2 mb-2">
+            <MudItem xs="12" md="4">
+                <MudSelect T="string" Value="RepoFetchConnectionId" ValueChanged="OnRepoFetchConnectionChanged" Label="Connection" Variant="Variant.Outlined">
+                    @foreach (var connection in Connections)
+                    {
+                        <MudSelectItem Value="@connection.Id">@connection.Name</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            @if (IsRepoFetchAdsConnection)
+            {
+                <MudItem xs="12" md="6">
+                    <MudSelect T="string"
+                               MultiSelection="true"
+                               SelectedValues="RepoFetchSelectedWorkspaces"
+                               SelectedValuesChanged="OnRepoFetchWorkspacesChanged"
+                               Label="ADS Workspaces (Projects)"
+                               Variant="Variant.Outlined">
+                        @foreach (var workspaceName in RepoFetchWorkspaceOptions.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+                        {
+                            <MudSelectItem Value="@workspaceName">@workspaceName</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+            }
+            <MudItem xs="12" md="2" Class="d-flex align-center">
+                <MudButton Variant="Variant.Filled" Color="Color.Secondary" OnClick="FetchRepositoriesAsync">Fetch repositories</MudButton>
+            </MudItem>
+        </MudGrid>
+
+        @foreach (var connection in Connections.OrderBy(c => c.Name))
+        {
+            <MudExpansionPanels Class="mt-3">
+                <MudExpansionPanel Text="@($"{connection.Name} ({connection.Type})")">
+                    @foreach (var workspace in Workspaces.Where(w => w.ConnectionId == connection.Id))
+                    {
+                        <MudPaper Class="pa-3 mt-2">
+                            <MudText Typo="Typo.subtitle1">@workspace.Name</MudText>
+
+                            @foreach (var repo in SortedReposForWorkspace(connection.Id, workspace.Id))
+                            {
+                                var latest = GetLatestSnapshot(repo.Id);
+                                <MudPaper Class="pa-3 mt-2">
+                                    <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
+                                        <div>
+                                            <MudText Typo="Typo.body1">@repo.Name</MudText>
+                                            <MudText Typo="Typo.caption">@repo.Url</MudText>
+                                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-1">
+                                                <MudIcon Icon="@Icons.Material.Filled.Calculate" Size="Size.Small" />
+                                                <MudText Typo="Typo.caption">@(latest?.Components.Count ?? 0)</MudText>
+
+                                                <MudIcon Icon="@Icons.Material.Filled.Event" Size="Size.Small" />
+                                                <MudText Typo="Typo.caption">@(latest?.Outdated.Count ?? 0)</MudText>
+
+                                                <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Size="Size.Small" Style="color:#f1c40f" />
+                                                <MudText Typo="Typo.caption">@SeverityCount(latest, "Low")</MudText>
+
+                                                <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Size="Size.Small" Style="color:#ff9800" />
+                                                <MudText Typo="Typo.caption">@SeverityCount(latest, "Medium")</MudText>
+
+                                                <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Size="Size.Small" Style="color:#e74c3c" />
+                                                <MudText Typo="Typo.caption">@SeverityCount(latest, "High")</MudText>
+                                            </MudStack>
+                                        </div>
+                                        <MudStack Row="true" Spacing="1">
+                                            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" OnClick="() => StartAnalyzeFromReposAsync(connection.Id, repo.Id)">@(latest is null ? "Analyze" : "Re-Analyze")</MudButton>
+                                            <MudButton Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small" OnClick="() => ViewComponentsForRepoAsync(repo.Id)">View components</MudButton>
+                                            <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small" OnClick="() => DeleteRepositoryAsync(repo.Id)">Delete</MudButton>
+                                        </MudStack>
+                                    </MudStack>
+
+                                    @if (latest is not null)
+                                    {
+                                        <MudText Typo="Typo.caption" Class="mt-2">Last analyzed: @latest.AnalyzedAtUtc.ToString("u")</MudText>
+                                    }
+                                </MudPaper>
+                            }
+                        </MudPaper>
+                    }
+                </MudExpansionPanel>
+            </MudExpansionPanels>
+        }
+    </MudTabPanel>
+
+    <MudTabPanel Text="Components">
+        <MudText Typo="Typo.h6">Latest 100 Components</MudText>
+
+        <MudGrid Class="mt-2 mb-2">
+            <MudItem xs="12" md="4">
+                <MudTextField @bind-Value="ComponentSearchText" Label="Search (Ecosystem, Package, Version)" Variant="Variant.Outlined" />
+            </MudItem>
+            <MudItem xs="12" md="4">
+                <MudSelect T="string?" @bind-Value="ComponentSeverityFilter" Label="Severity" Variant="Variant.Outlined">
+                    <MudSelectItem Value="@((string?)null)">All severities</MudSelectItem>
+                    @foreach (var option in ComponentSeverityOptions)
+                    {
+                        <MudSelectItem Value="@option">@option</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" md="4">
+                <MudSelect T="string?" @bind-Value="ComponentRepositoryId" Label="Repository" Variant="Variant.Outlined">
+                    <MudSelectItem Value="@((string?)null)">All repositories</MudSelectItem>
+                    @foreach (var repo in Repositories.OrderBy(r => r.Name))
+                    {
+                        <MudSelectItem Value="@repo.Id">@repo.Name</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" md="4" Class="d-flex align-center gap-2">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="ReloadComponentsAsync">Apply</MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Default" OnClick="ClearComponentFiltersAsync">Clear</MudButton>
+            </MudItem>
+        </MudGrid>
+
+        <MudTable Items="ComponentRows" Dense="true" Hover="true" Class="mt-3" RowClick="OnComponentRowClick" RowStyleFunc="@((ComponentRow item, int _) => ComponentListRowStyle(item))" @bind-RowsPerPage="ComponentsRowsPerPage">
+            <HeaderContent>
+                <MudTh></MudTh>
+                <MudTh>Ecosystem</MudTh>
+                <MudTh>Status</MudTh>
+                <MudTh>Name</MudTh>
+                <MudTh>Installed</MudTh>
+                <MudTh>Fixed</MudTh>
+                <MudTh>Transitive</MudTh>
+                <MudTh>Repository</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>
+                    <details>
+                        <summary style="cursor:pointer;font-size:12px;">Details</summary>
+                        <div style="margin-top:8px;">
+                            <div><strong>Repository:</strong> @context.RepositoryName</div>
+                            <div><strong>Project:</strong> @ProjectName(context.ProjectId)</div>
+                            <div><strong>Path:</strong> @context.Path</div>
+                            @{
+                                var locations = BuildComponentLocations(context);
+                                var transitiveRows = BuildTransitiveRows(context.RepositoryId, context.ProjectId);
+                            }
+                            <div style="margin-top:8px;"><strong>Locations</strong></div>
+                            <table style="width:100%;border-collapse:collapse;">
+                                <thead>
+                                    <tr>
+                                        <th style="text-align:left;padding:4px;">Repository</th>
+                                        <th style="text-align:left;padding:4px;">Project</th>
+                                        <th style="text-align:left;padding:4px;">Path</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var loc in locations)
+                                    {
+                                        <tr>
+                                            <td style="padding:4px;">@loc.RepositoryName</td>
+                                            <td style="padding:4px;">@loc.ProjectName</td>
+                                            <td style="padding:4px;">@loc.Path</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                            @if (transitiveRows.Count > 0)
+                            {
+                                <div style="margin-top:8px;"><strong>Transitive dependencies (inferred)</strong></div>
+                                <table style="width:100%;border-collapse:collapse;">
+                                    <thead>
+                                        <tr>
+                                            <th style="text-align:left;padding:4px;">Status</th>
+                                            <th style="text-align:left;padding:4px;">Package</th>
+                                            <th style="text-align:left;padding:4px;">Installed</th>
+                                            <th style="text-align:left;padding:4px;">Fixed</th>
+                                            <th style="text-align:left;padding:4px;">Severity</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var row in transitiveRows)
+                                        {
+                                            <tr style="@TransitiveRowInlineStyle(row)">
+                                                <td style="padding:4px;">@row.Status</td>
+                                                <td style="padding:4px;">@row.PackageName</td>
+                                                <td style="padding:4px;">@row.InstalledVersion</td>
+                                                <td style="padding:4px;">@row.FixedVersion</td>
+                                                <td style="padding:4px;">@row.Severity</td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            }
+                        </div>
+                    </details>
+                </MudTd>
+                <MudTd>@context.Ecosystem</MudTd>
+                <MudTd>@context.StatusLabel</MudTd>
+                <MudTd>@context.Name</MudTd>
+                <MudTd>@context.InstalledVersion</MudTd>
+                <MudTd>@context.FixedVersion</MudTd>
+                <MudTd>
+                    <MudBadge Content="@context.TransitiveCount" Color="Color.Info" Dot="false" />
+                </MudTd>
+                <MudTd>@context.RepositoryName</MudTd>
+            </RowTemplate>
+            <PagerContent>
+                <MudTablePager PageSizeOptions="new int[] { 100, 200, 500 }" />
+            </PagerContent>
+        </MudTable>
+
+        @if (SelectedComponentRow is not null)
+        {
+            <MudPaper Class="pa-3 mt-3">
+                <MudText Typo="Typo.subtitle1">@($"{SelectedComponentRow.Name} ({SelectedComponentRow.InstalledVersion})")</MudText>
+                <MudText Typo="Typo.caption">Ecosystem: @SelectedComponentRow.Ecosystem | Status: @SelectedComponentRow.StatusLabel | Fixed: @SelectedComponentRow.FixedVersion</MudText>
+                <MudText Typo="Typo.caption">Repository: @SelectedComponentRow.RepositoryName | Project: @ProjectName(SelectedComponentRow.ProjectId)</MudText>
+                <MudText Typo="Typo.caption">Path: @SelectedComponentRow.Path</MudText>
+                <MudTable Items="SelectedComponentLocations" Dense="true" Class="mt-2">
+                    <HeaderContent>
+                        <MudTh>Repository</MudTh>
+                        <MudTh>Project</MudTh>
+                        <MudTh>Path</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd>@context.RepositoryName</MudTd>
+                        <MudTd>@context.ProjectName</MudTd>
+                        <MudTd>@context.Path</MudTd>
+                    </RowTemplate>
+                </MudTable>
+
+                @if (SelectedComponentTransitiveRows.Count > 0)
+                {
+                    <MudText Typo="Typo.subtitle2" Class="mt-3">Transitive dependencies (inferred)</MudText>
+                    <MudTable Items="SelectedComponentTransitiveRows" Dense="true" RowStyleFunc="@((TransitiveDependencyRow item, int _) => TransitiveRowStyle(item))">
+                        <HeaderContent>
+                            <MudTh>Status</MudTh>
+                            <MudTh>Package</MudTh>
+                            <MudTh>Installed</MudTh>
+                            <MudTh>Fixed</MudTh>
+                            <MudTh>Severity</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>@context.Status</MudTd>
+                            <MudTd>@context.PackageName</MudTd>
+                            <MudTd>@context.InstalledVersion</MudTd>
+                            <MudTd>@context.FixedVersion</MudTd>
+                            <MudTd>@context.Severity</MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                }
+            </MudPaper>
+        }
+    </MudTabPanel>
+
+    <MudTabPanel Text="Findings">
+        <MudText Typo="Typo.h6">Global Findings Index</MudText>
+
+        <MudGrid Class="mt-2">
+            <MudItem xs="12" md="3">
+                <MudTextField @bind-Value="FindingsEcosystem" Label="Ecosystem" Variant="Variant.Outlined" />
+            </MudItem>
+            <MudItem xs="12" md="3">
+                <MudTextField @bind-Value="FindingsSeverity" Label="Severity" Variant="Variant.Outlined" />
+            </MudItem>
+            <MudItem xs="12" md="3">
+                <MudSelect T="string?" @bind-Value="FindingsRepoId" Label="Repository" Variant="Variant.Outlined">
+                    <MudSelectItem Value="@((string?)null)">All</MudSelectItem>
+                    @foreach (var repo in Repositories)
+                    {
+                        <MudSelectItem Value="@repo.Id">@repo.Name</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" md="3" Class="d-flex align-center">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="ReloadFindingsAsync">Apply</MudButton>
+            </MudItem>
+        </MudGrid>
+
+        <MudTable Items="GlobalFindings" Dense="true" Hover="true" Class="mt-3" RowClick="OnFindingRowClick" RowStyleFunc="@((GlobalFinding item, int _) => FindingRowStyle(item))" @bind-RowsPerPage="FindingsRowsPerPage">
+            <HeaderContent>
+                <MudTh></MudTh>
+                <MudTh>Type</MudTh>
+                <MudTh>Ecosystem</MudTh>
+                <MudTh>Package</MudTh>
+                <MudTh>Installed</MudTh>
+                <MudTh>Fixed</MudTh>
+                <MudTh>Severity</MudTh>
+                <MudTh>Affected</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>
+                    <details>
+                        <summary style="cursor:pointer;font-size:12px;">Details</summary>
+                        <div style="margin-top:8px;">
+                            <div><strong>Package:</strong> @context.PackageName (@context.InstalledVersion)</div>
+                            <div><strong>Status:</strong> @EffectiveFindingStatusLabel(context)</div>
+                            <div style="margin-top:8px;"><strong>Affected locations</strong></div>
+                            <table style="width:100%;border-collapse:collapse;">
+                                <thead>
+                                    <tr>
+                                        <th style="text-align:left;padding:4px;">Repository</th>
+                                        <th style="text-align:left;padding:4px;">Project</th>
+                                        <th style="text-align:left;padding:4px;">Path</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var loc in context.AffectedLocations)
+                                    {
+                                        <tr>
+                                            <td style="padding:4px;">@RepositoryName(loc.RepositoryId)</td>
+                                            <td style="padding:4px;">@ProjectName(loc.ProjectId)</td>
+                                            <td style="padding:4px;">@loc.Path</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                            @{
+                                var findingTransitive = BuildFindingTransitiveRows(context);
+                            }
+                            @if (findingTransitive.Count > 0)
+                            {
+                                <div style="margin-top:8px;"><strong>Transitive dependencies (inferred)</strong></div>
+                                <table style="width:100%;border-collapse:collapse;">
+                                    <thead>
+                                        <tr>
+                                            <th style="text-align:left;padding:4px;">Repository</th>
+                                            <th style="text-align:left;padding:4px;">Project</th>
+                                            <th style="text-align:left;padding:4px;">Status</th>
+                                            <th style="text-align:left;padding:4px;">Package</th>
+                                            <th style="text-align:left;padding:4px;">Installed</th>
+                                            <th style="text-align:left;padding:4px;">Fixed</th>
+                                            <th style="text-align:left;padding:4px;">Severity</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var row in findingTransitive)
+                                        {
+                                            <tr style="@TransitiveRowInlineStyle(row)">
+                                                <td style="padding:4px;">@row.RepositoryName</td>
+                                                <td style="padding:4px;">@row.ProjectName</td>
+                                                <td style="padding:4px;">@row.Status</td>
+                                                <td style="padding:4px;">@row.PackageName</td>
+                                                <td style="padding:4px;">@row.InstalledVersion</td>
+                                                <td style="padding:4px;">@row.FixedVersion</td>
+                                                <td style="padding:4px;">@row.Severity</td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            }
+                        </div>
+                    </details>
+                </MudTd>
+                <MudTd>@context.Type</MudTd>
+                <MudTd>@context.Ecosystem</MudTd>
+                <MudTd>@context.PackageName</MudTd>
+                <MudTd>@context.InstalledVersion</MudTd>
+                <MudTd>@context.FixedVersion</MudTd>
+                <MudTd>@EffectiveFindingSeverityLabel(context)</MudTd>
+                <MudTd>@context.AffectedLocations.Count</MudTd>
+            </RowTemplate>
+            <PagerContent>
+                <MudTablePager PageSizeOptions="new int[] { 100, 200, 500 }" />
+            </PagerContent>
+        </MudTable>
+
+        @if (SelectedGlobalFinding is not null)
+        {
+            <MudPaper Class="pa-3 mt-3">
+                <MudText Typo="Typo.subtitle1">@($"Affected locations: {SelectedGlobalFinding.PackageName}")</MudText>
+                <MudTable Items="SelectedGlobalFinding.AffectedLocations" Dense="true">
+                    <HeaderContent>
+                        <MudTh>Repository</MudTh>
+                        <MudTh>Project</MudTh>
+                        <MudTh>Path</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd>@RepositoryName(context.RepositoryId)</MudTd>
+                        <MudTd>@ProjectName(context.ProjectId)</MudTd>
+                        <MudTd>@context.Path</MudTd>
+                    </RowTemplate>
+                </MudTable>
+
+                @if (SelectedFindingTransitiveRows.Count > 0)
+                {
+                    <MudText Typo="Typo.subtitle2" Class="mt-3">Transitive dependencies (inferred)</MudText>
+                    <MudTable Items="SelectedFindingTransitiveRows" Dense="true" RowStyleFunc="@((TransitiveDependencyRow item, int _) => TransitiveRowStyle(item))">
+                        <HeaderContent>
+                            <MudTh>Repository</MudTh>
+                            <MudTh>Project</MudTh>
+                            <MudTh>Status</MudTh>
+                            <MudTh>Package</MudTh>
+                            <MudTh>Installed</MudTh>
+                            <MudTh>Fixed</MudTh>
+                            <MudTh>Severity</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>@context.RepositoryName</MudTd>
+                            <MudTd>@context.ProjectName</MudTd>
+                            <MudTd>@context.Status</MudTd>
+                            <MudTd>@context.PackageName</MudTd>
+                            <MudTd>@context.InstalledVersion</MudTd>
+                            <MudTd>@context.FixedVersion</MudTd>
+                            <MudTd>@context.Severity</MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                }
+            </MudPaper>
+        }
+    </MudTabPanel>
+
+    <MudTabPanel Text="Configuration">
+        <MudText Typo="Typo.h6">Connections</MudText>
+
+        <MudPaper Class="pa-4 mt-3">
+            <MudGrid>
+                <MudItem xs="12" md="4">
+                    <MudTextField @bind-Value="ConnectionForm.Name" Label="Name" Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12" md="3">
+                    <MudSelect T="ConnectionType" @bind-Value="ConnectionForm.Type" Label="Type" Variant="Variant.Outlined">
+                        <MudSelectItem Value="ConnectionType.AzureDevOpsServer">Azure DevOps Server</MudSelectItem>
+                        <MudSelectItem Value="ConnectionType.GitHub">GitHub</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" md="5">
+                    <MudTextField @bind-Value="ConnectionForm.BaseUrlOrOrg" Label="Base URL or Org/User" Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12" md="6">
+                    <MudTextField @bind-Value="ConnectionForm.RawToken" Label="PAT (leave blank to keep current)" Variant="Variant.Outlined" InputType="InputType.Password" />
+                </MudItem>
+                <MudItem xs="12" md="4">
+                    <MudDatePicker Date="@TokenExpiryDate" DateChanged="OnExpiryChanged" Label="Token Expires At (optional)" />
+                </MudItem>
+                <MudItem xs="12" md="2" Class="d-flex align-center">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveConnectionAsync">Save</MudButton>
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+
+        <MudTable Items="Connections" Dense="true" Hover="true" Class="mt-4">
+            <HeaderContent>
+                <MudTh>Name</MudTh>
+                <MudTh>Type</MudTh>
+                <MudTh>Target</MudTh>
+                <MudTh>Token</MudTh>
+                <MudTh>Expiry</MudTh>
+                <MudTh>Actions</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>@context.Name</MudTd>
+                <MudTd>@context.Type</MudTd>
+                <MudTd>@context.BaseUrlOrOrg</MudTd>
+                <MudTd>@(context.HasToken ? "Encrypted" : "Missing")</MudTd>
+                <MudTd>
+                    @if (context.TokenExpiresAt.HasValue)
+                    {
+                        var near = context.TokenExpiresAt.Value <= DateTimeOffset.UtcNow.AddDays(14);
+                        <MudChip Color="@(near ? Color.Warning : Color.Success)" Size="Size.Small">@context.TokenExpiresAt.Value.ToString("u")</MudChip>
+                    }
+                </MudTd>
+                <MudTd>
+                    <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="() => EditConnection(context)">Edit</MudButton>
+                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error" OnClick="() => DeleteConnectionAsync(context.Id)">Delete</MudButton>
+                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info" OnClick="() => TestConnectionAsync(context.Id)">Test connection</MudButton>
+                    @if (ConnectionTestResults.TryGetValue(context.Id, out var testResult))
+                    {
+                        <MudChip Size="Size.Small" Color="@(testResult.Success ? Color.Success : Color.Error)">@testResult.Message</MudChip>
+                    }
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    </MudTabPanel>
+
+    <MudTabPanel Text="Tools">
+        <MudText Typo="Typo.h6">Analysis Logs</MudText>
+        <MudText Typo="Typo.caption">Latest file: @AnalysisLogs.FileName | Showing @AnalysisLogs.ReturnedLines lines</MudText>
+
+        <MudGrid Class="mt-2 mb-2">
+            <MudItem xs="12" md="4">
+                <MudTextField @bind-Value="LogSearchText" Label="Search text" Variant="Variant.Outlined" />
+            </MudItem>
+            <MudItem xs="12" md="3">
+                <MudSelect T="string?" @bind-Value="LogLevelFilter" Label="Level" Variant="Variant.Outlined">
+                    <MudSelectItem Value="@((string?)null)">All</MudSelectItem>
+                    @foreach (var level in LogEntries.Select(x => x.Level).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x))
+                    {
+                        <MudSelectItem Value="@level">@level</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" md="3">
+                <MudSelect T="string" @bind-Value="LogSortBy" Label="Sort by" Variant="Variant.Outlined">
+                    <MudSelectItem Value="@("Timestamp")">Timestamp</MudSelectItem>
+                    <MudSelectItem Value="@("Level")">Level</MudSelectItem>
+                    <MudSelectItem Value="@("Provider")">Provider</MudSelectItem>
+                    <MudSelectItem Value="@("Step")">Step</MudSelectItem>
+                    <MudSelectItem Value="@("Message")">Message</MudSelectItem>
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" md="2">
+                <MudSwitch @bind-Checked="LogSortDescending" Color="Color.Primary" Label="Desc" />
+            </MudItem>
+            <MudItem xs="12" md="12" Class="d-flex align-center">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="ReloadLogsAsync">Refresh</MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Href="@Api.GetAnalysisLogDownloadUrl()" Target="_blank" Class="ml-2">Download</MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Error" OnClick="ClearLogsAsync" Class="ml-2">Clear</MudButton>
+            </MudItem>
+        </MudGrid>
+
+        <MudTable Items="FilteredLogEntries" Dense="true" Hover="true" Class="mt-2" RowsPerPage="100">
+            <HeaderContent>
+                <MudTh>Timestamp</MudTh>
+                <MudTh>Level</MudTh>
+                <MudTh>Provider</MudTh>
+                <MudTh>Step</MudTh>
+                <MudTh>Message</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>@context.TimestampUtc</MudTd>
+                <MudTd>@context.Level</MudTd>
+                <MudTd>@context.ProviderType</MudTd>
+                <MudTd>@context.Step</MudTd>
+                <MudTd>@context.Message</MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Typo="Typo.caption">No log entries found.</MudText>
+            </NoRecordsContent>
+        </MudTable>
+    </MudTabPanel>
+</MudTabs>
+
+@code {
+    private string? Error;
+    private string? InfoMessage;
+
+    private List<ConnectionView> Connections = new();
+    private List<Workspace> Workspaces = new();
+    private List<RepositoryEntity> Repositories = new();
+    private List<RepoAnalysisSnapshot> Snapshots = new();
+    private Dictionary<string, RepoAnalysisSnapshot> LatestSnapshotsByRepo = new(StringComparer.Ordinal);
+
+    private List<Component> Components = new();
+    private List<GlobalFinding> GlobalFindings = new();
+    private GlobalFinding? SelectedGlobalFinding;
+    private List<DashboardRow> DashboardRows = new();
+
+    private ConnectionUpsertRequest ConnectionForm = new() { Type = ConnectionType.GitHub };
+    private DateTime? TokenExpiryDate;
+    private readonly Dictionary<string, ConnectionTestResult> ConnectionTestResults = new(StringComparer.Ordinal);
+
+    private string? ComponentSearchText;
+    private string? ComponentSeverityFilter;
+    private string? ComponentRepositoryId;
+    private string? FindingsEcosystem;
+    private string? FindingsSeverity;
+    private string? FindingsRepoId;
+    private AnalysisLogLatestResponse AnalysisLogs = new();
+    private string? LogSearchText;
+    private string? LogLevelFilter;
+    private string LogSortBy = "Timestamp";
+    private bool LogSortDescending = true;
+
+    private string? AnalyzeConnectionId;
+    private string? AnalyzeRepositoryId;
+    private AnalyzeRun? CurrentAnalyzeRun;
+    private RepoAnalysisSnapshot? AnalyzeSnapshot;
+
+    private string? RepoFetchConnectionId;
+    private List<string> RepoFetchWorkspaceOptions = new();
+    private HashSet<string> RepoFetchSelectedWorkspaces = new(StringComparer.OrdinalIgnoreCase);
+    private int ActiveTabIndex;
+    private List<ComponentRow> ComponentRows = new();
+    private ComponentRow? SelectedComponentRow;
+    private List<ComponentLocationRow> SelectedComponentLocations = new();
+    private List<TransitiveDependencyRow> SelectedComponentTransitiveRows = new();
+    private List<TransitiveDependencyRow> SelectedFindingTransitiveRows = new();
+    private List<LogEntryRow> LogEntries = new();
+    private Dictionary<string, int> FindingEffectiveWeightByKey = new(StringComparer.Ordinal);
+    private Dictionary<string, string> FindingEffectiveStatusByKey = new(StringComparer.Ordinal);
+    private Dictionary<string, bool> FindingInheritedFromTransitiveByKey = new(StringComparer.Ordinal);
+    private int _componentsRowsPerPage = 100;
+    private int _findingsRowsPerPage = 100;
+    private bool _prefsLoaded;
+
+    private List<string> ComponentSeverityOptions =>
+        ComponentRows
+            .Select(x => x.SeverityFilterValue)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(SeverityRankForFilter)
+            .ThenBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    private int ComponentsRowsPerPage
+    {
+        get => _componentsRowsPerPage;
+        set
+        {
+            _componentsRowsPerPage = value;
+            _ = Js.InvokeVoidAsync("localStorage.setItem", "repoanalyzer.components.rowsperpage", value.ToString());
+        }
+    }
+
+    private int FindingsRowsPerPage
+    {
+        get => _findingsRowsPerPage;
+        set
+        {
+            _findingsRowsPerPage = value;
+            _ = Js.InvokeVoidAsync("localStorage.setItem", "repoanalyzer.findings.rowsperpage", value.ToString());
+        }
+    }
+
+    private List<RepositoryEntity> AnalyzeRepositories =>
+        string.IsNullOrWhiteSpace(AnalyzeConnectionId)
+            ? new List<RepositoryEntity>()
+            : Repositories.Where(r => r.ConnectionId == AnalyzeConnectionId).OrderBy(r => r.Name).ToList();
+
+    private bool IsRepoFetchAdsConnection =>
+        Connections.FirstOrDefault(x => x.Id == RepoFetchConnectionId)?.Type == ConnectionType.AzureDevOpsServer;
+
+    private string AnalyzeStatusText =>
+        CurrentAnalyzeRun is null
+            ? string.Empty
+            : string.IsNullOrWhiteSpace(CurrentAnalyzeRun.CurrentStep)
+                ? (CurrentAnalyzeRun.CurrentMessage ?? CurrentAnalyzeRun.Status)
+                : $"{CurrentAnalyzeRun.CurrentStep}: {CurrentAnalyzeRun.CurrentMessage}";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ReloadAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _prefsLoaded)
+        {
+            return;
+        }
+
+        _prefsLoaded = true;
+
+        try
+        {
+            var componentsPref = await Js.InvokeAsync<string?>("localStorage.getItem", "repoanalyzer.components.rowsperpage");
+            if (int.TryParse(componentsPref, out var componentsRows) && (componentsRows is 100 or 200 or 500))
+            {
+                _componentsRowsPerPage = componentsRows;
+            }
+
+            var findingsPref = await Js.InvokeAsync<string?>("localStorage.getItem", "repoanalyzer.findings.rowsperpage");
+            if (int.TryParse(findingsPref, out var findingsRows) && (findingsRows is 100 or 200 or 500))
+            {
+                _findingsRowsPerPage = findingsRows;
+            }
+
+            StateHasChanged();
+        }
+        catch
+        {
+            // Ignore local storage read issues.
+        }
+    }
+
+    private async Task ReloadAsync()
+    {
+        Error = null;
+
+        Connections = await Api.GetConnectionsAsync();
+        Workspaces = await Api.GetWorkspacesAsync();
+        Repositories = await Api.GetRepositoriesAsync();
+        Snapshots = await Api.GetSnapshotsAsync();
+
+        LatestSnapshotsByRepo = Snapshots.ToDictionary(x => x.RepositoryId, x => x, StringComparer.Ordinal);
+
+        if (string.IsNullOrWhiteSpace(AnalyzeConnectionId) && Connections.Count > 0)
+        {
+            AnalyzeConnectionId = Connections[0].Id;
+        }
+
+        if (string.IsNullOrWhiteSpace(AnalyzeRepositoryId) && AnalyzeRepositories.Count > 0)
+        {
+            AnalyzeRepositoryId = AnalyzeRepositories[0].Id;
+        }
+
+        if (string.IsNullOrWhiteSpace(RepoFetchConnectionId) && Connections.Count > 0)
+        {
+            RepoFetchConnectionId = Connections[0].Id;
+        }
+
+        await LoadRepoFetchWorkspaceOptionsAsync();
+
+        DashboardRows = Snapshots
+            .OrderByDescending(s => s.AnalyzedAtUtc)
+            .Select(s => new DashboardRow
+            {
+                RepositoryName = RepositoryNameWithCount(s.RepositoryId),
+                AnalyzedAtUtc = s.AnalyzedAtUtc,
+                VulnerabilityCount = s.Vulnerabilities.Count,
+                OutdatedCount = s.Outdated.Count
+            })
+            .Where(x => x.VulnerabilityCount > 0 || x.OutdatedCount > 0)
+            .ToList();
+
+        await ReloadComponentsAsync();
+        await ReloadFindingsAsync();
+        await ReloadLogsAsync();
+        LoadAnalyzeSnapshotForSelection();
+    }
+
+    private async Task SaveConnectionAsync()
+    {
+        try
+        {
+            InfoMessage = null;
+            ConnectionForm.TokenExpiresAt = TokenExpiryDate.HasValue ? new DateTimeOffset(TokenExpiryDate.Value.ToUniversalTime()) : null;
+            await Api.SaveConnectionAsync(ConnectionForm);
+
+            ConnectionForm = new ConnectionUpsertRequest { Type = ConnectionType.GitHub };
+            TokenExpiryDate = null;
+
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            Error = ex.Message;
+        }
+    }
+
+    private void EditConnection(ConnectionView existing)
+    {
+        ConnectionForm = new ConnectionUpsertRequest
+        {
+            Id = existing.Id,
+            Name = existing.Name,
+            Type = existing.Type,
+            BaseUrlOrOrg = existing.BaseUrlOrOrg,
+            TokenExpiresAt = existing.TokenExpiresAt
+        };
+        TokenExpiryDate = existing.TokenExpiresAt?.UtcDateTime;
+    }
+
+    private async Task DeleteConnectionAsync(string id)
+    {
+        await Api.DeleteConnectionAsync(id);
+        await ReloadAsync();
+    }
+
+    private async Task TestConnectionAsync(string id)
+    {
+        var result = await Api.TestConnectionAsync(id);
+        if (result is not null)
+        {
+            ConnectionTestResults[id] = result;
+        }
+    }
+
+    private async Task FetchRepositoriesAsync()
+    {
+        if (string.IsNullOrWhiteSpace(RepoFetchConnectionId))
+        {
+            Error = "Select a connection first.";
+            return;
+        }
+
+        if (IsRepoFetchAdsConnection && RepoFetchWorkspaceOptions.Count > 0 && RepoFetchSelectedWorkspaces.Count == 0)
+        {
+            Error = "Select at least one ADS workspace.";
+            return;
+        }
+
+        var selectedWorkspaces = IsRepoFetchAdsConnection ? RepoFetchSelectedWorkspaces : null;
+        var result = await Api.FetchRepositoriesAsync(RepoFetchConnectionId, selectedWorkspaces);
+        InfoMessage = result is null
+            ? "Repository fetch completed."
+            : $"Repository fetch completed. Added workspaces: {result.AddedWorkspaces}, added repositories: {result.AddedRepositories}.";
+
+        await ReloadAsync();
+    }
+
+    private async Task StartAnalyzeFromAnalyzeTab()
+    {
+        if (string.IsNullOrWhiteSpace(AnalyzeRepositoryId))
+        {
+            Error = "Select a repository first.";
+            return;
+        }
+
+        await StartAnalyze(AnalyzeRepositoryId);
+    }
+
+    private async Task StartAnalyzeFromReposAsync(string connectionId, string repositoryId)
+    {
+        AnalyzeConnectionId = connectionId;
+        AnalyzeRepositoryId = repositoryId;
+        ActiveTabIndex = 1;
+        await StartAnalyze(repositoryId);
+    }
+
+    private async Task ViewComponentsForRepoAsync(string repositoryId)
+    {
+        ComponentRepositoryId = repositoryId;
+        ActiveTabIndex = 3;
+        await ReloadComponentsAsync();
+    }
+
+    private async Task DeleteRepositoryAsync(string repositoryId)
+    {
+        var repoName = Repositories.FirstOrDefault(x => x.Id == repositoryId)?.Name ?? repositoryId;
+        var confirmed = await Js.InvokeAsync<bool>("confirm", $"Delete repository '{repoName}' and all analyzed data for it?");
+        if (!confirmed)
+        {
+            return;
+        }
+
+        await Api.DeleteRepositoryAsync(repositoryId);
+        await ReloadAsync();
+        InfoMessage = $"Repository '{repoName}' and its analyzed data were deleted.";
+    }
+
+    private async Task StartAnalyze(string repositoryId)
+    {
+        Error = null;
+        InfoMessage = null;
+
+        CurrentAnalyzeRun = await Api.StartAnalysisAsync(repositoryId);
+        AnalyzeSnapshot = null;
+
+        if (CurrentAnalyzeRun is null)
+        {
+            Error = "Could not start analysis.";
+            return;
+        }
+
+        await PollAnalysisRunAsync(CurrentAnalyzeRun.Id);
+    }
+
+    private async Task DeleteAnalyzeSnapshotAsync()
+    {
+        if (string.IsNullOrWhiteSpace(AnalyzeRepositoryId))
+        {
+            return;
+        }
+
+        var confirmed = await Js.InvokeAsync<bool>("confirm", "Delete latest analysis result for selected repository?");
+        if (!confirmed)
+        {
+            return;
+        }
+
+        await Api.DeleteAnalysisAsync(AnalyzeRepositoryId);
+        AnalyzeSnapshot = null;
+        CurrentAnalyzeRun = null;
+        await ReloadAsync();
+        InfoMessage = "Analysis result deleted.";
+    }
+
+    private async Task PollAnalysisRunAsync(string runId)
+    {
+        for (var i = 0; i < 240; i++)
+        {
+            var status = await Api.GetAnalysisRunAsync(runId);
+            if (status is null)
+            {
+                break;
+            }
+
+            CurrentAnalyzeRun = status;
+            StateHasChanged();
+
+            if (status.Status is "Completed" or "Failed")
+            {
+                break;
+            }
+
+            await Task.Delay(750);
+        }
+
+        if (CurrentAnalyzeRun?.Status == "Completed")
+        {
+            await ReloadAsync();
+            LoadAnalyzeSnapshotForSelection();
+            InfoMessage = "Analysis completed.";
+        }
+        else if (CurrentAnalyzeRun?.Status == "Failed")
+        {
+            Error = CurrentAnalyzeRun.Error ?? "Analysis failed.";
+        }
+    }
+
+    private async Task ReloadComponentsAsync()
+    {
+        Components = await Api.GetComponentsAsync(null, ComponentRepositoryId);
+
+        ComponentRows = Components
+            .Select(ToComponentRow)
+            .Where(x => ComponentMatchesSearch(x, ComponentSearchText))
+            .Where(x => string.IsNullOrWhiteSpace(ComponentSeverityFilter) || string.Equals(x.SeverityFilterValue, ComponentSeverityFilter, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(x => x.SortWeight)
+            .ThenBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(x => x.RepositoryName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (SelectedComponentRow is not null)
+        {
+                SelectedComponentRow = ComponentRows.FirstOrDefault(x => x.Id == SelectedComponentRow.Id);
+            if (SelectedComponentRow is null)
+            {
+                SelectedComponentLocations.Clear();
+                SelectedComponentTransitiveRows.Clear();
+            }
+            else
+            {
+                SelectedComponentLocations = BuildComponentLocations(SelectedComponentRow);
+                SelectedComponentTransitiveRows = BuildTransitiveRows(SelectedComponentRow.RepositoryId, SelectedComponentRow.ProjectId);
+            }
+        }
+    }
+
+    private async Task ClearComponentFiltersAsync()
+    {
+        ComponentSearchText = null;
+        ComponentSeverityFilter = null;
+        ComponentRepositoryId = null;
+        SelectedComponentRow = null;
+        SelectedComponentLocations.Clear();
+        SelectedComponentTransitiveRows.Clear();
+        await ReloadComponentsAsync();
+    }
+
+    private async Task ReloadFindingsAsync()
+    {
+        GlobalFindings = await Api.GetFindingsAsync(FindingsEcosystem, FindingsSeverity, FindingsRepoId);
+        FindingEffectiveWeightByKey = GlobalFindings.ToDictionary(x => x.Key, CalculateEffectiveFindingWeight, StringComparer.Ordinal);
+        FindingInheritedFromTransitiveByKey = GlobalFindings.ToDictionary(x => x.Key, IsFindingInheritedFromTransitive, StringComparer.Ordinal);
+        FindingEffectiveStatusByKey = GlobalFindings.ToDictionary(x => x.Key, CalculateEffectiveFindingStatusLabel, StringComparer.Ordinal);
+        GlobalFindings = GlobalFindings
+            .OrderByDescending(EffectiveFindingSortWeight)
+            .ThenBy(f => f.PackageName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (SelectedGlobalFinding is not null)
+        {
+            SelectedGlobalFinding = GlobalFindings.FirstOrDefault(x => x.Key == SelectedGlobalFinding.Key);
+            SelectedFindingTransitiveRows = SelectedGlobalFinding is null
+                ? new List<TransitiveDependencyRow>()
+                : BuildFindingTransitiveRows(SelectedGlobalFinding);
+        }
+    }
+
+    private async Task ReloadLogsAsync()
+    {
+        AnalysisLogs = await Api.GetLatestAnalysisLogsAsync(2000);
+        LogEntries = AnalysisLogs.Lines
+            .Select(ParseLogEntry)
+            .Where(x => x is not null)
+            .Select(x => x!)
+            .ToList();
+    }
+
+    private async Task ClearLogsAsync()
+    {
+        var confirmed = await Js.InvokeAsync<bool>("confirm", "Clear the current analysis log file?");
+        if (!confirmed)
+        {
+            return;
+        }
+
+        await Api.ClearAnalysisLogsAsync();
+        await ReloadLogsAsync();
+        InfoMessage = "Analysis logs cleared.";
+    }
+
+    private void OnExpiryChanged(DateTime? value)
+    {
+        TokenExpiryDate = value;
+    }
+
+    private Task OnAnalyzeConnectionChanged(string value)
+    {
+        AnalyzeConnectionId = value;
+        AnalyzeRepositoryId = AnalyzeRepositories.FirstOrDefault()?.Id;
+        LoadAnalyzeSnapshotForSelection();
+        return Task.CompletedTask;
+    }
+
+    private Task OnAnalyzeRepositoryChanged(string value)
+    {
+        AnalyzeRepositoryId = value;
+        LoadAnalyzeSnapshotForSelection();
+        return Task.CompletedTask;
+    }
+
+    private async Task OnRepoFetchConnectionChanged(string value)
+    {
+        RepoFetchConnectionId = value;
+        await LoadRepoFetchWorkspaceOptionsAsync();
+    }
+
+    private Task OnRepoFetchWorkspacesChanged(IEnumerable<string> values)
+    {
+        RepoFetchSelectedWorkspaces = values
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return Task.CompletedTask;
+    }
+
+    private async Task LoadRepoFetchWorkspaceOptionsAsync()
+    {
+        RepoFetchWorkspaceOptions = new List<string>();
+        RepoFetchSelectedWorkspaces = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (string.IsNullOrWhiteSpace(RepoFetchConnectionId))
+        {
+            return;
+        }
+
+        var connection = Connections.FirstOrDefault(x => x.Id == RepoFetchConnectionId);
+        if (connection?.Type != ConnectionType.AzureDevOpsServer)
+        {
+            return;
+        }
+
+        var names = await Api.GetProviderWorkspaceNamesPreviewAsync(RepoFetchConnectionId);
+        RepoFetchWorkspaceOptions = names
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        RepoFetchSelectedWorkspaces = RepoFetchWorkspaceOptions.ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private void LoadAnalyzeSnapshotForSelection()
+    {
+        if (string.IsNullOrWhiteSpace(AnalyzeRepositoryId))
+        {
+            AnalyzeSnapshot = null;
+            return;
+        }
+
+        LatestSnapshotsByRepo.TryGetValue(AnalyzeRepositoryId, out var snapshot);
+        AnalyzeSnapshot = snapshot;
+    }
+
+    private void OnFindingRowClick(TableRowClickEventArgs<GlobalFinding> args)
+    {
+        SelectFindingRow(args.Item);
+    }
+
+    private void OnComponentRowClick(TableRowClickEventArgs<ComponentRow> args)
+    {
+        SelectComponentRow(args.Item);
+    }
+
+    private void SelectFindingRow(GlobalFinding finding)
+    {
+        SelectedGlobalFinding = finding;
+        SelectedFindingTransitiveRows = BuildFindingTransitiveRows(finding);
+    }
+
+    private void SelectComponentRow(ComponentRow row)
+    {
+        SelectedComponentRow = row;
+        SelectedComponentLocations = BuildComponentLocations(row);
+        SelectedComponentTransitiveRows = BuildTransitiveRows(row.RepositoryId, row.ProjectId);
+    }
+
+    private IEnumerable<RepositoryEntity> SortedReposForWorkspace(string connectionId, string workspaceId)
+        => Repositories
+            .Where(r => r.ConnectionId == connectionId && r.WorkspaceId == workspaceId)
+            .OrderByDescending(r => LatestSnapshotsByRepo.TryGetValue(r.Id, out var s) ? s.AnalyzedAtUtc : DateTimeOffset.MinValue)
+            .ThenBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    private RepoAnalysisSnapshot? GetLatestSnapshot(string repositoryId)
+        => LatestSnapshotsByRepo.TryGetValue(repositoryId, out var snapshot) ? snapshot : null;
+
+    private string RepoSelectorLabel(RepositoryEntity repo)
+    {
+        if (!LatestSnapshotsByRepo.TryGetValue(repo.Id, out var snapshot))
+        {
+            return $"{repo.Name} (Not analyzed)";
+        }
+
+        return $"{repo.Name} ({snapshot.AnalyzedAtUtc:yyyy-MM-dd HH:mm} UTC)";
+    }
+
+    private string AnalyzeRepoHeader(RepoAnalysisSnapshot snapshot)
+    {
+        var totalFindings = snapshot.Vulnerabilities.Count + snapshot.Outdated.Count;
+        return $"{RepositoryName(snapshot.RepositoryId)} ({totalFindings})";
+    }
+
+    private string ProjectHeader(DetectedProject project, RepoAnalysisSnapshot snapshot)
+    {
+        var count = snapshot.Vulnerabilities.Count(f => f.ProjectId == project.Id) + snapshot.Outdated.Count(f => f.ProjectId == project.Id);
+        return $"{project.Name} ({count})";
+    }
+
+    private int SeverityCount(RepoAnalysisSnapshot? snapshot, string severity)
+    {
+        if (snapshot is null)
+        {
+            return 0;
+        }
+
+        if (severity.Equals("High", StringComparison.OrdinalIgnoreCase))
+        {
+            return snapshot.Vulnerabilities.Count(v => NormalizeSeverity(v.Severity) is "High" or "Critical");
+        }
+
+        return snapshot.Vulnerabilities.Count(v => NormalizeSeverity(v.Severity).Equals(severity, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string NormalizeSeverity(string? severity)
+    {
+        if (string.IsNullOrWhiteSpace(severity))
+        {
+            return "Unknown";
+        }
+
+        var value = severity.Trim().ToLowerInvariant();
+        return value switch
+        {
+            "critical" => "Critical",
+            "high" => "High",
+            "medium" => "Medium",
+            "moderate" => "Medium",
+            "low" => "Low",
+            _ => "Unknown"
+        };
+    }
+
+    private string ComponentStatus(Component component, List<Finding> projectFindings)
+    {
+        var vulnerabilities = projectFindings
+            .Where(f => f.Type == FindingType.Vulnerability && string.Equals(f.PackageName, component.Name, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (vulnerabilities.Count > 0)
+        {
+            var highest = vulnerabilities
+                .Select(v => NormalizeSeverity(v.Severity))
+                .OrderByDescending(SeverityRank)
+                .FirstOrDefault() ?? "Unknown";
+            return $"Vulnerable ({highest})";
+        }
+
+        var outdated = projectFindings.Any(f => f.Type == FindingType.Outdated && string.Equals(f.PackageName, component.Name, StringComparison.OrdinalIgnoreCase));
+        if (outdated)
+        {
+            return "Outdated";
+        }
+
+        return "OK";
+    }
+
+    private string ComponentRowStyle(Component component, List<Finding> projectFindings)
+    {
+        var vulnerabilities = projectFindings
+            .Where(f => f.Type == FindingType.Vulnerability && string.Equals(f.PackageName, component.Name, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (vulnerabilities.Count > 0)
+        {
+            var maxRank = vulnerabilities.Select(v => SeverityRank(NormalizeSeverity(v.Severity))).DefaultIfEmpty(0).Max();
+            return maxRank switch
+            {
+                >= 4 => "background-color:#ffcdd2;",
+                3 => "background-color:#ffd9cc;",
+                2 => "background-color:#ffd59e;",
+                1 => "background-color:#fff9c4;",
+                _ => "background-color:#fff9c4;"
+            };
+        }
+
+        var outdated = projectFindings.Any(f => f.Type == FindingType.Outdated && string.Equals(f.PackageName, component.Name, StringComparison.OrdinalIgnoreCase));
+        if (outdated)
+        {
+            return "background-color:#f2f2f2;";
+        }
+
+        return "background-color:#e8f5e9;";
+    }
+
+    private ComponentRow ToComponentRow(Component component)
+    {
+        var snapshot = LatestSnapshotsByRepo.GetValueOrDefault(component.RepositoryId);
+        var findings = snapshot is null
+            ? new List<Finding>()
+            : snapshot.Vulnerabilities.Concat(snapshot.Outdated)
+                .Where(f => f.ProjectId == component.ProjectId && string.Equals(f.PackageName, component.Name, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+        var vulnerabilities = findings.Where(f => f.Type == FindingType.Vulnerability).ToList();
+        var outdated = findings.Where(f => f.Type == FindingType.Outdated).ToList();
+
+        var highestSeverity = vulnerabilities
+            .Select(v => NormalizeSeverity(v.Severity))
+            .OrderByDescending(SeverityRank)
+            .FirstOrDefault() ?? "Unknown";
+
+        var status = vulnerabilities.Count > 0
+            ? "Vulnerable"
+            : outdated.Count > 0
+                ? "Outdated"
+                : "OK";
+        var severityFilterValue = status switch
+        {
+            "Vulnerable" => highestSeverity,
+            "Outdated" => "Outdated",
+            _ => "OK"
+        };
+
+        var fixedVersion = vulnerabilities.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v.FixedVersion))?.FixedVersion
+            ?? outdated.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v.FixedVersion))?.FixedVersion
+            ?? string.Empty;
+
+        var sortWeight = status switch
+        {
+            "Vulnerable" => 100 + SeverityRank(highestSeverity),
+            "Outdated" => 10,
+            _ => 0
+        };
+        var inheritedFromTransitive = false;
+
+        var transitiveRows = BuildTransitiveRows(component.RepositoryId, component.ProjectId);
+        var worstTransitive = transitiveRows.OrderByDescending(x => x.SortWeight).FirstOrDefault();
+        if (worstTransitive is not null && worstTransitive.SortWeight > sortWeight)
+        {
+            inheritedFromTransitive = true;
+            sortWeight = worstTransitive.SortWeight;
+            status = worstTransitive.Status;
+            highestSeverity = worstTransitive.Status == "Vulnerable" ? worstTransitive.Severity : "Unknown";
+            severityFilterValue = worstTransitive.Status == "Vulnerable"
+                ? worstTransitive.Severity
+                : worstTransitive.Status;
+            if (!string.IsNullOrWhiteSpace(worstTransitive.FixedVersion))
+            {
+                fixedVersion = worstTransitive.FixedVersion;
+            }
+        }
+
+        var directNames = snapshot?.Components
+            .Where(c => c.ProjectId == component.ProjectId)
+            .Select(c => c.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase)
+            ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var transitiveCount = snapshot is null
+            ? 0
+            : snapshot.Vulnerabilities.Concat(snapshot.Outdated)
+                .Where(f => f.ProjectId == component.ProjectId)
+                .Where(f => !directNames.Contains(f.PackageName))
+                .Select(f => $"{f.PackageName}|{f.InstalledVersion}")
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count();
+
+        return new ComponentRow
+        {
+            Id = component.Id,
+            Ecosystem = component.Ecosystem,
+            Name = component.Name,
+            InstalledVersion = component.Version,
+            FixedVersion = fixedVersion,
+            RepositoryId = component.RepositoryId,
+            RepositoryName = RepositoryName(component.RepositoryId),
+            ProjectId = component.ProjectId,
+            Path = component.Path,
+            Status = status,
+            StatusLabel = BuildComponentStatusLabel(status, highestSeverity, inheritedFromTransitive),
+            HighestSeverity = highestSeverity,
+            SeverityFilterValue = severityFilterValue,
+            TransitiveCount = transitiveCount,
+            SortWeight = sortWeight
+        };
+    }
+
+    private List<ComponentLocationRow> BuildComponentLocations(ComponentRow row)
+    {
+        return Snapshots
+            .SelectMany(s => s.Components)
+            .Where(c =>
+                string.Equals(c.Ecosystem, row.Ecosystem, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(c.Name, row.Name, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(c.Version, row.InstalledVersion, StringComparison.OrdinalIgnoreCase))
+            .Select(c => new ComponentLocationRow
+            {
+                RepositoryId = c.RepositoryId,
+                RepositoryName = RepositoryName(c.RepositoryId),
+                ProjectName = ProjectName(c.ProjectId),
+                Path = c.Path
+            })
+            .DistinctBy(x => $"{x.RepositoryId}|{x.Path}")
+            .OrderBy(x => x.RepositoryName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(x => x.Path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private List<TransitiveDependencyRow> BuildTransitiveRows(string repositoryId, string projectId)
+    {
+        var snapshot = LatestSnapshotsByRepo.GetValueOrDefault(repositoryId);
+        if (snapshot is null)
+        {
+            return new List<TransitiveDependencyRow>();
+        }
+
+        var directNames = snapshot.Components
+            .Where(c => c.ProjectId == projectId)
+            .Select(c => c.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return snapshot.Vulnerabilities.Concat(snapshot.Outdated)
+            .Where(f => f.ProjectId == projectId)
+            .Where(f => !directNames.Contains(f.PackageName))
+            .GroupBy(f => $"{f.PackageName}|{f.InstalledVersion}", StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var entries = group.ToList();
+                var vulns = entries.Where(x => x.Type == FindingType.Vulnerability).ToList();
+                var outdated = entries.Where(x => x.Type == FindingType.Outdated).ToList();
+                var highest = vulns.Select(v => NormalizeSeverity(v.Severity)).OrderByDescending(SeverityRank).FirstOrDefault() ?? "Unknown";
+
+                var status = vulns.Count > 0
+                    ? "Vulnerable"
+                    : outdated.Count > 0
+                        ? "Outdated"
+                        : "OK";
+
+                return new TransitiveDependencyRow
+                {
+                    RepositoryId = repositoryId,
+                    RepositoryName = RepositoryName(repositoryId),
+                    ProjectId = projectId,
+                    ProjectName = ProjectName(projectId),
+                    PackageName = entries[0].PackageName,
+                    InstalledVersion = entries[0].InstalledVersion ?? string.Empty,
+                    FixedVersion = entries.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x.FixedVersion))?.FixedVersion ?? string.Empty,
+                    Status = status,
+                    Severity = status == "Vulnerable" ? highest : status,
+                    SortWeight = status == "Vulnerable" ? 100 + SeverityRank(highest) : status == "Outdated" ? 10 : 0
+                };
+            })
+            .OrderByDescending(x => x.SortWeight)
+            .ThenBy(x => x.PackageName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private List<TransitiveDependencyRow> BuildFindingTransitiveRows(GlobalFinding finding)
+    {
+        return finding.AffectedLocations
+            .SelectMany(loc => BuildTransitiveRows(loc.RepositoryId, loc.ProjectId))
+            .GroupBy(x => $"{x.RepositoryId}|{x.ProjectId}|{x.PackageName}|{x.InstalledVersion}", StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .OrderByDescending(x => x.SortWeight)
+            .ThenBy(x => x.RepositoryName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(x => x.ProjectName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(x => x.PackageName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static bool ComponentMatchesSearch(ComponentRow row, string? searchText)
+    {
+        if (string.IsNullOrWhiteSpace(searchText))
+        {
+            return true;
+        }
+
+        return row.Ecosystem.Contains(searchText, StringComparison.OrdinalIgnoreCase) ||
+               row.Name.Contains(searchText, StringComparison.OrdinalIgnoreCase) ||
+               row.InstalledVersion.Contains(searchText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private string ComponentListRowStyle(ComponentRow row)
+    {
+        if (row.Status == "Vulnerable")
+        {
+            return SeverityRank(row.HighestSeverity) switch
+            {
+                >= 4 => "background-color:#ffcdd2;",
+                3 => "background-color:#ffd9cc;",
+                2 => "background-color:#ffd59e;",
+                1 => "background-color:#fff9c4;",
+                _ => "background-color:#fff9c4;"
+            };
+        }
+
+        if (row.Status == "Outdated")
+        {
+            return "background-color:#f2f2f2;";
+        }
+
+        return "background-color:#e8f5e9;";
+    }
+
+    private string TransitiveRowStyle(TransitiveDependencyRow row)
+    {
+        if (row.Status == "Vulnerable")
+        {
+            return SeverityRank(row.Severity) switch
+            {
+                >= 4 => "background-color:#ffcdd2;",
+                3 => "background-color:#ffd9cc;",
+                2 => "background-color:#ffd59e;",
+                1 => "background-color:#fff9c4;",
+                _ => "background-color:#fff9c4;"
+            };
+        }
+
+        if (row.Status == "Outdated")
+        {
+            return "background-color:#f2f2f2;";
+        }
+
+        return "background-color:#e8f5e9;";
+    }
+
+    private string TransitiveRowInlineStyle(TransitiveDependencyRow row)
+    {
+        if (row.Status == "Vulnerable")
+        {
+            return SeverityRank(row.Severity) switch
+            {
+                >= 4 => "background-color:#ffcdd2;",
+                3 => "background-color:#ffd9cc;",
+                2 => "background-color:#ffd59e;",
+                1 => "background-color:#fff9c4;",
+                _ => "background-color:#fff9c4;"
+            };
+        }
+
+        if (row.Status == "Outdated")
+        {
+            return "background-color:#f2f2f2;";
+        }
+
+        return "background-color:#e8f5e9;";
+    }
+
+    private static int BaseFindingSortWeight(GlobalFinding finding)
+    {
+        if (finding.Type == FindingType.Vulnerability)
+        {
+            return 100 + SeverityRank(NormalizeSeverity(finding.Severity));
+        }
+
+        if (finding.Type == FindingType.Outdated)
+        {
+            return 10;
+        }
+
+        return 0;
+    }
+
+    private int EffectiveFindingSortWeight(GlobalFinding finding)
+        => FindingEffectiveWeightByKey.GetValueOrDefault(finding.Key, BaseFindingSortWeight(finding));
+
+    private int CalculateEffectiveFindingWeight(GlobalFinding finding)
+    {
+        var direct = BaseFindingSortWeight(finding);
+        var transitive = BuildFindingTransitiveRows(finding).Select(x => x.SortWeight).DefaultIfEmpty(0).Max();
+        return Math.Max(direct, transitive);
+    }
+
+    private bool IsFindingInheritedFromTransitive(GlobalFinding finding)
+        => CalculateEffectiveFindingWeight(finding) > BaseFindingSortWeight(finding);
+
+    private string EffectiveFindingSeverityLabel(GlobalFinding finding)
+    {
+        var weight = EffectiveFindingSortWeight(finding);
+        var viaTransitive = FindingInheritedFromTransitiveByKey.GetValueOrDefault(finding.Key, false);
+        if (weight >= 100)
+        {
+            var sev = FindingSeverityFromWeight(weight);
+            return viaTransitive
+                ? $"Vulnerable ({sev}, via transitive)"
+                : $"Vulnerable ({sev})";
+        }
+
+        return weight >= 10
+            ? (viaTransitive ? "Outdated (via transitive)" : "Outdated")
+            : "OK";
+    }
+
+    private string CalculateEffectiveFindingStatusLabel(GlobalFinding finding)
+        => EffectiveFindingSeverityLabel(finding);
+
+    private string EffectiveFindingStatusLabel(GlobalFinding finding)
+        => FindingEffectiveStatusByKey.GetValueOrDefault(finding.Key, EffectiveFindingSeverityLabel(finding));
+
+    private static string BuildComponentStatusLabel(string status, string highestSeverity, bool viaTransitive)
+    {
+        if (status == "Vulnerable")
+        {
+            return viaTransitive
+                ? $"Vulnerable ({highestSeverity}, via transitive)"
+                : $"Vulnerable ({highestSeverity})";
+        }
+
+        if (status == "Outdated")
+        {
+            return viaTransitive ? "Outdated (via transitive)" : "Outdated";
+        }
+
+        return "OK";
+    }
+
+    private static string FindingSeverityFromWeight(int weight)
+    {
+        var sevRank = weight - 100;
+        return sevRank switch
+        {
+            >= 4 => "Critical",
+            3 => "High",
+            2 => "Medium",
+            1 => "Low",
+            _ => "Unknown"
+        };
+    }
+
+    private string FindingRowStyle(GlobalFinding finding)
+    {
+        var effectiveWeight = EffectiveFindingSortWeight(finding);
+        if (effectiveWeight >= 100)
+        {
+            return (effectiveWeight - 100) switch
+            {
+                >= 4 => "background-color:#ffcdd2;",
+                3 => "background-color:#ffd9cc;",
+                2 => "background-color:#ffd59e;",
+                1 => "background-color:#fff9c4;",
+                _ => "background-color:#fff9c4;"
+            };
+        }
+
+        return effectiveWeight >= 10
+            ? "background-color:#f2f2f2;"
+            : "background-color:#e8f5e9;";
+    }
+
+    private static int SeverityRank(string severity)
+        => severity switch
+        {
+            "Critical" => 4,
+            "High" => 3,
+            "Medium" => 2,
+            "Low" => 1,
+            _ => 0
+        };
+
+    private static int SeverityRankForFilter(string severity)
+        => severity switch
+        {
+            "Critical" => 60,
+            "High" => 50,
+            "Medium" => 40,
+            "Low" => 30,
+            "Unknown" => 20,
+            "Outdated" => 10,
+            "OK" => 0,
+            _ => 0
+        };
+
+    private string RepositoryName(string repositoryId)
+        => Repositories.FirstOrDefault(r => r.Id == repositoryId)?.Name ?? repositoryId;
+
+    private string RepositoryNameWithCount(string repositoryId)
+    {
+        var name = RepositoryName(repositoryId);
+        var total = RepoFindingCount(repositoryId);
+        return $"{name} ({total})";
+    }
+
+    private int RepoFindingCount(string repositoryId)
+    {
+        if (!LatestSnapshotsByRepo.TryGetValue(repositoryId, out var snapshot))
+        {
+            return 0;
+        }
+
+        return snapshot.Vulnerabilities.Count + snapshot.Outdated.Count;
+    }
+
+    private string ProjectName(string projectId)
+    {
+        var project = Snapshots.SelectMany(s => s.DetectedProjects).FirstOrDefault(p => p.Id == projectId);
+        return project?.Name ?? projectId;
+    }
+
+    private Color RunStatusColor(string status) => status switch
+    {
+        "Queued" => Color.Info,
+        "Running" => Color.Warning,
+        "Completed" => Color.Success,
+        "Failed" => Color.Error,
+        _ => Color.Default
+    };
+
+    private List<LogEntryRow> FilteredLogEntries
+    {
+        get
+        {
+            IEnumerable<LogEntryRow> query = LogEntries;
+
+            if (!string.IsNullOrWhiteSpace(LogSearchText))
+            {
+                query = query.Where(x =>
+                    x.Message.Contains(LogSearchText, StringComparison.OrdinalIgnoreCase) ||
+                    x.Step.Contains(LogSearchText, StringComparison.OrdinalIgnoreCase) ||
+                    x.ProviderType.Contains(LogSearchText, StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (!string.IsNullOrWhiteSpace(LogLevelFilter))
+            {
+                query = query.Where(x => string.Equals(x.Level, LogLevelFilter, StringComparison.OrdinalIgnoreCase));
+            }
+
+            query = (LogSortBy, LogSortDescending) switch
+            {
+                ("Level", true) => query.OrderByDescending(x => x.Level),
+                ("Level", false) => query.OrderBy(x => x.Level),
+                ("Provider", true) => query.OrderByDescending(x => x.ProviderType),
+                ("Provider", false) => query.OrderBy(x => x.ProviderType),
+                ("Step", true) => query.OrderByDescending(x => x.Step),
+                ("Step", false) => query.OrderBy(x => x.Step),
+                ("Message", true) => query.OrderByDescending(x => x.Message),
+                ("Message", false) => query.OrderBy(x => x.Message),
+                ("Timestamp", false) => query.OrderBy(x => x.TimestampUtc),
+                _ => query.OrderByDescending(x => x.TimestampUtc)
+            };
+
+            return query.ToList();
+        }
+    }
+
+    private static LogEntryRow? ParseLogEntry(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            return new LogEntryRow
+            {
+                TimestampUtc = root.TryGetProperty("TimestampUtc", out var ts) ? ts.GetString() ?? string.Empty : string.Empty,
+                Level = root.TryGetProperty("Level", out var lvl) ? lvl.GetString() ?? string.Empty : string.Empty,
+                ProviderType = root.TryGetProperty("ProviderType", out var provider) ? provider.GetString() ?? string.Empty : string.Empty,
+                Step = root.TryGetProperty("Step", out var step) ? step.GetString() ?? string.Empty : string.Empty,
+                Message = root.TryGetProperty("Message", out var message) ? message.GetString() ?? string.Empty : string.Empty
+            };
+        }
+        catch
+        {
+            return new LogEntryRow
+            {
+                TimestampUtc = string.Empty,
+                Level = "Unknown",
+                ProviderType = string.Empty,
+                Step = "Unparsed",
+                Message = line
+            };
+        }
+    }
+
+    private sealed class DashboardRow
+    {
+        public string RepositoryName { get; set; } = string.Empty;
+        public DateTimeOffset AnalyzedAtUtc { get; set; }
+        public int VulnerabilityCount { get; set; }
+        public int OutdatedCount { get; set; }
+    }
+
+    private sealed class ComponentRow
+    {
+        public string Id { get; set; } = string.Empty;
+        public string Ecosystem { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string InstalledVersion { get; set; } = string.Empty;
+        public string FixedVersion { get; set; } = string.Empty;
+        public string RepositoryId { get; set; } = string.Empty;
+        public string RepositoryName { get; set; } = string.Empty;
+        public string ProjectId { get; set; } = string.Empty;
+        public string Path { get; set; } = string.Empty;
+        public string Status { get; set; } = "OK";
+        public string StatusLabel { get; set; } = "OK";
+        public string HighestSeverity { get; set; } = "Unknown";
+        public string SeverityFilterValue { get; set; } = "OK";
+        public int TransitiveCount { get; set; }
+        public int SortWeight { get; set; }
+    }
+
+    private sealed class ComponentLocationRow
+    {
+        public string RepositoryId { get; set; } = string.Empty;
+        public string RepositoryName { get; set; } = string.Empty;
+        public string ProjectName { get; set; } = string.Empty;
+        public string Path { get; set; } = string.Empty;
+    }
+
+    private sealed class TransitiveDependencyRow
+    {
+        public string RepositoryId { get; set; } = string.Empty;
+        public string RepositoryName { get; set; } = string.Empty;
+        public string ProjectId { get; set; } = string.Empty;
+        public string ProjectName { get; set; } = string.Empty;
+        public string PackageName { get; set; } = string.Empty;
+        public string InstalledVersion { get; set; } = string.Empty;
+        public string FixedVersion { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public string Severity { get; set; } = string.Empty;
+        public int SortWeight { get; set; }
+    }
+
+    private sealed class LogEntryRow
+    {
+        public string TimestampUtc { get; set; } = string.Empty;
+        public string Level { get; set; } = string.Empty;
+        public string ProviderType { get; set; } = string.Empty;
+        public string Step { get; set; } = string.Empty;
+        public string Message { get; set; } = string.Empty;
+    }
+}
