@@ -48,6 +48,12 @@
                     <MudText Typo="Typo.h5">@DashboardOutdated</MudText>
                 </MudPaper>
             </MudItem>
+            <MudItem xs="12" sm="6" md="3">
+                <MudPaper Class="pa-3">
+                    <MudText Typo="Typo.caption">JSON Data Size</MudText>
+                    <MudText Typo="Typo.h5">@DashboardJsonSizeMbDisplay MB</MudText>
+                </MudPaper>
+            </MudItem>
         </MudGrid>
 
         <MudPaper Class="pa-3 mt-3">
@@ -993,6 +999,8 @@
     private int DashboardNotAnalyzedCount => DashboardTotalRepositories - DashboardAnalyzedCount;
     private int DashboardVulnerabilities => Snapshots.Sum(s => s.Vulnerabilities.Count);
     private int DashboardOutdated => Snapshots.Sum(s => s.Outdated.Count);
+    private long DashboardJsonTotalBytes;
+    private string DashboardJsonSizeMbDisplay => (DashboardJsonTotalBytes / (1024d * 1024d)).ToString("0.00");
 
     private int ComponentsRowsPerPage
     {
@@ -1083,6 +1091,8 @@
         Workspaces = await Api.GetWorkspacesAsync();
         Repositories = await Api.GetRepositoriesAsync();
         Snapshots = await Api.GetSnapshotsAsync();
+        var storageStats = await Api.GetDataStorageStatsAsync();
+        DashboardJsonTotalBytes = storageStats.TotalJsonBytes;
 
         LatestSnapshotsByRepo = Snapshots.ToDictionary(x => x.RepositoryId, x => x, StringComparer.Ordinal);
 

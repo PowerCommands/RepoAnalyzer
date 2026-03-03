@@ -134,6 +134,9 @@ public sealed class InternalApiClient
         return await response.Content.ReadFromJsonAsync<BackupRestoreResult>(cancellationToken: ct);
     }
 
+    public async Task<DataStorageStatsResponse> GetDataStorageStatsAsync(CancellationToken ct = default)
+        => await GetAsync<DataStorageStatsResponse>("/internal-api/tools/storage/stats", ct) ?? new DataStorageStatsResponse();
+
     private static string? GetFileName(ContentDispositionHeaderValue? header)
     {
         var value = header?.FileNameStar ?? header?.FileName;

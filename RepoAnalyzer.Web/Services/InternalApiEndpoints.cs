@@ -130,6 +130,25 @@ public static class InternalApiEndpoints
             return Results.Ok(restored);
         });
 
+        group.MapGet("/tools/storage/stats", (IConfiguration configuration) =>
+        {
+            var dataPath = configuration["DataPath"] ?? "/app/data";
+            Directory.CreateDirectory(dataPath);
+
+            var jsonFiles = Directory.GetFiles(dataPath, "*.json", SearchOption.TopDirectoryOnly);
+            var totalBytes = jsonFiles
+                .Select(path => new FileInfo(path))
+                .Sum(file => file.Exists ? file.Length : 0L);
+
+            var response = new DataStorageStatsResponse
+            {
+                JsonFileCount = jsonFiles.Length,
+                TotalJsonBytes = totalBytes
+            };
+
+            return Results.Ok(response);
+        });
+
         return app;
     }
 }
