@@ -55,6 +55,9 @@ public static class InternalApiEndpoints
         group.MapPost("/analysis/start", (AnalyzeStartRequest request, AnalyzeRunService runs) =>
             Results.Ok(runs.Start(request.RepositoryId)));
 
+        group.MapGet("/analysis/runs/recent", (int? take, AnalyzeRunService runs) =>
+            Results.Ok(runs.GetRecent(take.GetValueOrDefault(20))));
+
         group.MapGet("/analysis/runs/{runId}", (string runId, AnalyzeRunService runs) =>
         {
             var run = runs.Get(runId);
@@ -100,6 +103,31 @@ public static class InternalApiEndpoints
         {
             await logs.ClearAsync(ct);
             return Results.Ok();
+        });
+
+        group.MapGet("/tools/backup/download", async (BackupService backup, CancellationToken ct) =>
+        {
+            var result = await backup.CreateBackupZipAsync(ct);
+            return Results.File(result.Stream, "application/zip", result.FileName);
+        });
+
+        group.MapPost("/tools/backup/restore", async (HttpRequest request, BackupService backup, CancellationToken ct) =>
+        {
+            if (!request.HasFormContentType)
+            {
+                return Results.BadRequest("Expected multipart form data.");
+            }
+
+            var form = await request.ReadFormAsync(ct);
+            var file = form.Files["file"] ?? form.Files.FirstOrDefault();
+            if (file is null || file.Length == 0)
+            {
+                return Results.BadRequest("Backup file is required.");
+            }
+
+            await using var stream = file.OpenReadStream();
+            var restored = await backup.RestoreZipAsync(stream, ct);
+            return Results.Ok(restored);
         });
 
         return app;

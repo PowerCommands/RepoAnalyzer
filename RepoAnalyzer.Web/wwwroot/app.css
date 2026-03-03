@@ -27,3 +27,10 @@ main {
     right: 0.75rem;
     top: 0.5rem;
 }
+
+.ecosystem-icon {
+    width: 18px;
+    height: 18px;
+    object-fit: contain;
+    vertical-align: middle;
+}

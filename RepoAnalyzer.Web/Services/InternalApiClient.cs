@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Net.Http.Headers;
 using RepoAnalyzer.Web.Dto;
 using RepoAnalyzer.Web.Models;
 
@@ -63,6 +64,9 @@ public sealed class InternalApiClient
     public async Task<AnalyzeRun?> GetAnalysisRunAsync(string runId, CancellationToken ct = default)
         => await GetAsync<AnalyzeRun>($"/internal-api/analysis/runs/{runId}", ct);
 
+    public async Task<List<AnalyzeRun>> GetRecentAnalysisRunsAsync(int take = 20, CancellationToken ct = default)
+        => await GetAsync<List<AnalyzeRun>>($"/internal-api/analysis/runs/recent?take={take}", ct) ?? new List<AnalyzeRun>();
+
     public async Task<List<RepoAnalysisSnapshot>> GetSnapshotsAsync(CancellationToken ct = default)
         => await GetAsync<List<RepoAnalysisSnapshot>>("/internal-api/snapshots", ct) ?? new List<RepoAnalysisSnapshot>();
 
@@ -99,6 +103,47 @@ public sealed class InternalApiClient
         => await PostAsync<object, object>("/internal-api/tools/logs/clear", new { }, ct);
 
     public string GetAnalysisLogDownloadUrl() => "/internal-api/tools/logs/download";
+
+    public async Task<BackupDownloadResult> DownloadBackupAsync(CancellationToken ct = default)
+    {
+        var client = BuildClient();
+        using var response = await client.GetAsync("/internal-api/tools/backup/download", ct);
+        response.EnsureSuccessStatusCode();
+
+        var bytes = await response.Content.ReadAsByteArrayAsync(ct);
+        var fileName = GetFileName(response.Content.Headers.ContentDisposition) ?? $"repo-analyzer-backup-{DateTime.UtcNow:yyyyMMdd-HHmmss}.zip";
+
+        return new BackupDownloadResult
+        {
+            FileName = fileName,
+            Bytes = bytes
+        };
+    }
+
+    public async Task<BackupRestoreResult?> RestoreBackupAsync(string fileName, Stream stream, CancellationToken ct = default)
+    {
+        var client = BuildClient();
+        using var content = new MultipartFormDataContent();
+        using var fileContent = new StreamContent(stream);
+        fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/zip");
+        content.Add(fileContent, "file", fileName);
+
+        using var response = await client.PostAsync("/internal-api/tools/backup/restore", content, ct);
+        response.EnsureSuccessStatusCode();
+
+        return await response.Content.ReadFromJsonAsync<BackupRestoreResult>(cancellationToken: ct);
+    }
+
+    private static string? GetFileName(ContentDispositionHeaderValue? header)
+    {
+        var value = header?.FileNameStar ?? header?.FileName;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        return value.Trim('"');
+    }
 
     private async Task<T?> GetAsync<T>(string relativeUrl, CancellationToken ct)
     {
@@ -156,5 +201,11 @@ public sealed class InternalApiClient
     {
         public int AddedWorkspaces { get; set; }
         public int AddedRepositories { get; set; }
+    }
+
+    public sealed class BackupDownloadResult
+    {
+        public string FileName { get; set; } = string.Empty;
+        public byte[] Bytes { get; set; } = Array.Empty<byte>();
     }
 }

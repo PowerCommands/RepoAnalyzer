@@ -4,6 +4,16 @@
     flex-direction: column;
 }
 
+.app-logo {
+    width: 20px;
+    height: 20px;
+    object-fit: contain;
+}
+
+.app-version {
+    opacity: 0.9;
+}
+
 main {
     flex: 1;
 }

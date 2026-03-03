@@ -116,6 +116,19 @@ public sealed class RepositoryAnalyzerService
                     ["elapsedMs"] = fetchListTimer.ElapsedMilliseconds
                 },
                 ct);
+            if (files.Count == 0)
+            {
+                await _analysisLog.WarningAsync(
+                    currentStep,
+                    "Repository file list is empty; analysis will likely produce no projects or findings.",
+                    context,
+                    new Dictionary<string, object?>
+                    {
+                        ["fileCount"] = 0,
+                        ["hint"] = "Verify repository visibility, default branch, and provider access scope."
+                    },
+                    ct);
+            }
             ReportProgress(progress, currentStep, "Repository file list fetched.", 12);
 
             var fileMap = files.ToDictionary(f => NormalizePath(f.Path), f => f.Content, StringComparer.OrdinalIgnoreCase);
@@ -139,6 +152,18 @@ public sealed class RepositoryAnalyzerService
                     ["elapsedMs"] = manifestTimer.ElapsedMilliseconds
                 },
                 ct);
+            if (manifestPaths.Count == 0)
+            {
+                await _analysisLog.WarningAsync(
+                    currentStep,
+                    "No supported manifest files found; no dependency scans will run.",
+                    context,
+                    new Dictionary<string, object?>
+                    {
+                        ["supportedManifests"] = new[] { "*.csproj", "packages.config", "Directory.Packages.props", "package.json", "requirements.txt", "pom.xml" }
+                    },
+                    ct);
+            }
             ReportProgress(progress, currentStep, "Manifest paths collected.", 20);
 
             currentStep = "DetectProjects";

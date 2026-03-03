@@ -1,7 +1,11 @@
 @page "/"
 @using System.Text.Json
+@using Microsoft.AspNetCore.Components.Web
+@using RepoAnalyzer.Web.Components.Shared
 @inject InternalApiClient Api
 @inject IJSRuntime Js
+@inject IDialogService DialogService
+@inject IConfiguration Configuration
 
 <PageTitle>Repo Analyzer</PageTitle>
 
@@ -19,21 +23,106 @@
 
 <MudTabs Rounded="true" PanelClass="pa-4" @bind-ActivePanelIndex="ActiveTabIndex">
     <MudTabPanel Text="Dashboard">
-        <MudText Typo="Typo.h6">Repositories With Findings</MudText>
-        <MudTable Items="DashboardRows" Dense="true" Hover="true" Class="mt-3">
-            <HeaderContent>
-                <MudTh>Repository</MudTh>
-                <MudTh>Analyzed (UTC)</MudTh>
-                <MudTh>Vulnerabilities</MudTh>
-                <MudTh>Outdated</MudTh>
-            </HeaderContent>
-            <RowTemplate>
-                <MudTd>@context.RepositoryName</MudTd>
-                <MudTd>@context.AnalyzedAtUtc.ToString("u")</MudTd>
-                <MudTd>@context.VulnerabilityCount</MudTd>
-                <MudTd>@context.OutdatedCount</MudTd>
-            </RowTemplate>
-        </MudTable>
+        <MudGrid>
+            <MudItem xs="12" sm="6" md="3">
+                <MudPaper Class="pa-3">
+                    <MudText Typo="Typo.caption">Total Repositories</MudText>
+                    <MudText Typo="Typo.h5">@DashboardTotalRepositories</MudText>
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="12" sm="6" md="3">
+                <MudPaper Class="pa-3">
+                    <MudText Typo="Typo.caption">Analyzed / Not Analyzed</MudText>
+                    <MudText Typo="Typo.h5">@DashboardAnalyzedCount / @DashboardNotAnalyzedCount</MudText>
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="12" sm="6" md="3">
+                <MudPaper Class="pa-3">
+                    <MudText Typo="Typo.caption">Total Vulnerabilities</MudText>
+                    <MudText Typo="Typo.h5">@DashboardVulnerabilities</MudText>
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="12" sm="6" md="3">
+                <MudPaper Class="pa-3">
+                    <MudText Typo="Typo.caption">Total Outdated</MudText>
+                    <MudText Typo="Typo.h5">@DashboardOutdated</MudText>
+                </MudPaper>
+            </MudItem>
+        </MudGrid>
+
+        <MudPaper Class="pa-3 mt-3">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                <MudText Typo="Typo.h6">Action Queue</MudText>
+                <MudStack Row="true" Spacing="1">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Disabled="@(DashboardNotAnalyzedRepos.Count == 0 || BatchIsRunning)" OnClick="AnalyzeNextNotAnalyzedAsync">Analyze next</MudButton>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@(DashboardNotAnalyzedRepos.Count == 0 || BatchIsRunning)" OnClick="AnalyzeAllNotAnalyzedAsync">Analyze all not analyzed</MudButton>
+                </MudStack>
+            </MudStack>
+            <MudTable Items="DashboardNotAnalyzedRepos" Dense="true" Hover="true" Class="mt-2">
+                <HeaderContent>
+                    <MudTh>Repository</MudTh>
+                    <MudTh>Connection</MudTh>
+                    <MudTh>Status</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@context.Name</MudTd>
+                    <MudTd>@ConnectionName(context.ConnectionId)</MudTd>
+                    <MudTd><MudChip Color="Color.Warning" Size="Size.Small">Not Analyzed</MudChip></MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <MudText Typo="Typo.caption">All repositories are analyzed.</MudText>
+                </NoRecordsContent>
+            </MudTable>
+        </MudPaper>
+
+        <MudPaper Class="pa-3 mt-3">
+            <MudText Typo="Typo.h6">Highest Risk Repositories</MudText>
+            <MudTable Items="DashboardRiskRows" Dense="true" Hover="true" Class="mt-2">
+                <HeaderContent>
+                    <MudTh>Repository</MudTh>
+                    <MudTh>Highest Severity</MudTh>
+                    <MudTh>Vulnerabilities</MudTh>
+                    <MudTh>Outdated</MudTh>
+                    <MudTh>Action</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@context.RepositoryName</MudTd>
+                    <MudTd>
+                        <MudChip Size="Size.Small" Style="@SeverityChipStyle(context.HighestSeverity)">
+                            @context.HighestSeverity
+                        </MudChip>
+                    </MudTd>
+                    <MudTd>@context.VulnerabilityCount</MudTd>
+                    <MudTd>@context.OutdatedCount</MudTd>
+                    <MudTd>
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Info" OnClick="() => OpenFindingsForRepositoryAsync(context.RepositoryId)">Open findings</MudButton>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        </MudPaper>
+
+        <MudPaper Class="pa-3 mt-3">
+            <MudText Typo="Typo.h6">Recent Runs</MudText>
+            <MudTable Items="RecentRuns" Dense="true" Hover="true" Class="mt-2">
+                <HeaderContent>
+                    <MudTh>Repository</MudTh>
+                    <MudTh>Status</MudTh>
+                    <MudTh>Started (UTC)</MudTh>
+                    <MudTh>Updated (UTC)</MudTh>
+                    <MudTh>Duration</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@RepositoryName(context.RepositoryId)</MudTd>
+                    <MudTd><MudChip Color="@RunStatusColor(context.Status)" Size="Size.Small">@context.Status</MudChip></MudTd>
+                    <MudTd>@context.StartedAtUtc.ToString("u")</MudTd>
+                    <MudTd>@context.UpdatedAtUtc.ToString("u")</MudTd>
+                    <MudTd>@FormatRunDuration(context)</MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <MudText Typo="Typo.caption">No analysis runs yet.</MudText>
+                </NoRecordsContent>
+            </MudTable>
+        </MudPaper>
     </MudTabPanel>
 
     <MudTabPanel Text="Analyze">
@@ -56,10 +145,47 @@
                 </MudSelect>
             </MudItem>
             <MudItem xs="12" md="2" Class="d-flex align-center gap-2">
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="StartAnalyzeFromAnalyzeTab">Analyze</MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@BatchIsRunning" OnClick="StartAnalyzeFromAnalyzeTab">Analyze</MudButton>
                 <MudButton Variant="Variant.Outlined" Color="Color.Error" Disabled="@(AnalyzeSnapshot is null || string.IsNullOrWhiteSpace(AnalyzeRepositoryId))" OnClick="DeleteAnalyzeSnapshotAsync">Delete result</MudButton>
             </MudItem>
         </MudGrid>
+
+        @if (BatchIsRunning || BatchCancelRequested || BatchCompletedCount > 0 || BatchFailedCount > 0)
+        {
+            <MudPaper Class="pa-3 mt-3">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                    <MudText Typo="Typo.subtitle2">Batch Analysis</MudText>
+                    @if (BatchIsRunning)
+                    {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Warning" Disabled="@BatchCancelRequested" OnClick="RequestBatchCancelAsync">Cancel after current repo</MudButton>
+                    }
+                </MudStack>
+
+                <MudText Typo="Typo.caption" Class="mt-1">@BatchSummaryText</MudText>
+                @if (!string.IsNullOrWhiteSpace(BatchCurrentRepoName))
+                {
+                    <MudText Typo="Typo.caption">Current repo: @BatchCurrentRepoName</MudText>
+                }
+
+                <MudProgressLinear Class="mt-2" Color="Color.Primary" Value="@BatchTotalProgressPercent" />
+                @if (CurrentAnalyzeRun is not null && CurrentAnalyzeRun.Status is "Running" or "Queued")
+                {
+                    @if (CurrentAnalyzeRun.ProgressPercent.HasValue)
+                    {
+                        <MudProgressLinear Class="mt-2" Color="Color.Info" Value="@CurrentAnalyzeRun.ProgressPercent.Value" />
+                    }
+                    else
+                    {
+                        <MudProgressLinear Class="mt-2" Color="Color.Info" Indeterminate="true" />
+                    }
+                }
+
+                @if (BatchCancelRequested)
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Warning" Class="mt-1">Cancellation requested. Batch will stop after current repository finishes.</MudText>
+                }
+            </MudPaper>
+        }
 
         @if (CurrentAnalyzeRun is not null)
         {
@@ -120,7 +246,10 @@
                         var projectComponents = AnalyzeSnapshot.Components.Where(c => c.ProjectId == project.Id).ToList();
                         <MudExpansionPanels Class="mt-3">
                             <MudExpansionPanel Text="@ProjectHeader(project, AnalyzeSnapshot)">
-                                <MudText Typo="Typo.caption">Type: @project.ProjectType | Framework: @project.Framework | Version: @project.Version | Language: @project.Language</MudText>
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                                    <img src="@ProjectIconPath(project)" alt="@project.ProjectType icon" class="ecosystem-icon" />
+                                    <MudText Typo="Typo.caption">Type: @project.ProjectType | Framework: @project.Framework | Version: @project.Version | Language: @project.Language</MudText>
+                                </MudStack>
                                 <MudText Typo="Typo.caption">Path: @project.Path</MudText>
 
                                 <MudText Typo="Typo.subtitle2" Class="mt-2">Components</MudText>
@@ -134,7 +263,12 @@
                                     </HeaderContent>
                                     <RowTemplate>
                                         <MudTd>@ComponentStatus(context, projectFindings)</MudTd>
-                                        <MudTd>@context.Ecosystem</MudTd>
+                                        <MudTd>
+                                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                                <img src="@EcosystemIconPath(context.Ecosystem)" alt="@context.Ecosystem icon" class="ecosystem-icon" />
+                                                <span>@context.Ecosystem</span>
+                                            </MudStack>
+                                        </MudTd>
                                         <MudTd>@context.Name</MudTd>
                                         <MudTd>@context.Version</MudTd>
                                         <MudTd>@context.Path</MudTd>
@@ -205,7 +339,15 @@
         @foreach (var connection in Connections.OrderBy(c => c.Name))
         {
             <MudExpansionPanels Class="mt-3">
-                <MudExpansionPanel Text="@($"{connection.Name} ({connection.Type})")">
+                <MudExpansionPanel Text="@ConnectionHeader(connection)">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.FlexEnd" Class="mb-2">
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   Disabled="@BatchIsRunning"
+                                   OnClick="() => StartAnalyzeAllForConnectionAsync(connection.Id)">
+                            Analyze all
+                        </MudButton>
+                    </MudStack>
                     @foreach (var workspace in Workspaces.Where(w => w.ConnectionId == connection.Id))
                     {
                         <MudPaper Class="pa-3 mt-2">
@@ -219,26 +361,33 @@
                                         <div>
                                             <MudText Typo="Typo.body1">@repo.Name</MudText>
                                             <MudText Typo="Typo.caption">@repo.Url</MudText>
-                                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-1">
-                                                <MudIcon Icon="@Icons.Material.Filled.Calculate" Size="Size.Small" />
-                                                <MudText Typo="Typo.caption">@(latest?.Components.Count ?? 0)</MudText>
+                                            @if (latest is null)
+                                            {
+                                                <MudChip Color="Color.Warning" Size="Size.Small" Variant="Variant.Filled" Class="mt-1">Not Analyzed</MudChip>
+                                            }
+                                            else
+                                            {
+                                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-1">
+                                                    <MudIcon Icon="@Icons.Material.Filled.Calculate" Size="Size.Small" />
+                                                    <MudText Typo="Typo.caption">@latest.Components.Count</MudText>
 
-                                                <MudIcon Icon="@Icons.Material.Filled.Event" Size="Size.Small" />
-                                                <MudText Typo="Typo.caption">@(latest?.Outdated.Count ?? 0)</MudText>
+                                                    <MudIcon Icon="@Icons.Material.Filled.Event" Size="Size.Small" />
+                                                    <MudText Typo="Typo.caption">@latest.Outdated.Count</MudText>
 
-                                                <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Size="Size.Small" Style="color:#f1c40f" />
-                                                <MudText Typo="Typo.caption">@SeverityCount(latest, "Low")</MudText>
+                                                    <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Size="Size.Small" Style="color:#f1c40f" />
+                                                    <MudText Typo="Typo.caption">@SeverityCount(latest, "Low")</MudText>
 
-                                                <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Size="Size.Small" Style="color:#ff9800" />
-                                                <MudText Typo="Typo.caption">@SeverityCount(latest, "Medium")</MudText>
+                                                    <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Size="Size.Small" Style="color:#ff9800" />
+                                                    <MudText Typo="Typo.caption">@SeverityCount(latest, "Medium")</MudText>
 
-                                                <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Size="Size.Small" Style="color:#e74c3c" />
-                                                <MudText Typo="Typo.caption">@SeverityCount(latest, "High")</MudText>
-                                            </MudStack>
+                                                    <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Size="Size.Small" Style="color:#e74c3c" />
+                                                    <MudText Typo="Typo.caption">@SeverityCount(latest, "High")</MudText>
+                                                </MudStack>
+                                            }
                                         </div>
                                         <MudStack Row="true" Spacing="1">
-                                            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" OnClick="() => StartAnalyzeFromReposAsync(connection.Id, repo.Id)">@(latest is null ? "Analyze" : "Re-Analyze")</MudButton>
-                                            <MudButton Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small" OnClick="() => ViewComponentsForRepoAsync(repo.Id)">View components</MudButton>
+                                            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" Disabled="@BatchIsRunning" OnClick="() => StartAnalyzeFromReposAsync(connection.Id, repo.Id)">@(latest is null ? "Analyze" : "Re-Analyze")</MudButton>
+                                            <MudButton Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small" Disabled="@(latest is null)" OnClick="() => ViewComponentsForRepoAsync(repo.Id)">View components</MudButton>
                                             <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small" OnClick="() => DeleteRepositoryAsync(repo.Id)">Delete</MudButton>
                                         </MudStack>
                                     </MudStack>
@@ -261,10 +410,10 @@
 
         <MudGrid Class="mt-2 mb-2">
             <MudItem xs="12" md="4">
-                <MudTextField @bind-Value="ComponentSearchText" Label="Search (Ecosystem, Package, Version)" Variant="Variant.Outlined" />
+                <MudTextField @bind-Value="ComponentSearchText" Label="Search (Ecosystem, Package, Version)" Variant="Variant.Outlined" Immediate="true" OnKeyDown="OnComponentsFilterKeyDown" />
             </MudItem>
             <MudItem xs="12" md="4">
-                <MudSelect T="string?" @bind-Value="ComponentSeverityFilter" Label="Severity" Variant="Variant.Outlined">
+                <MudSelect T="string?" Value="ComponentSeverityFilter" ValueChanged="OnComponentSeverityFilterChanged" Label="Severity" Variant="Variant.Outlined">
                     <MudSelectItem Value="@((string?)null)">All severities</MudSelectItem>
                     @foreach (var option in ComponentSeverityOptions)
                     {
@@ -273,7 +422,7 @@
                 </MudSelect>
             </MudItem>
             <MudItem xs="12" md="4">
-                <MudSelect T="string?" @bind-Value="ComponentRepositoryId" Label="Repository" Variant="Variant.Outlined">
+                <MudSelect T="string?" Value="ComponentRepositoryId" ValueChanged="OnComponentRepositoryFilterChanged" Label="Repository" Variant="Variant.Outlined">
                     <MudSelectItem Value="@((string?)null)">All repositories</MudSelectItem>
                     @foreach (var repo in Repositories.OrderBy(r => r.Name))
                     {
@@ -360,7 +509,12 @@
                         </div>
                     </details>
                 </MudTd>
-                <MudTd>@context.Ecosystem</MudTd>
+                <MudTd>
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                        <img src="@EcosystemIconPath(context.Ecosystem)" alt="@context.Ecosystem icon" class="ecosystem-icon" />
+                        <span>@context.Ecosystem</span>
+                    </MudStack>
+                </MudTd>
                 <MudTd>@context.StatusLabel</MudTd>
                 <MudTd>@context.Name</MudTd>
                 <MudTd>@context.InstalledVersion</MudTd>
@@ -424,13 +578,13 @@
 
         <MudGrid Class="mt-2">
             <MudItem xs="12" md="3">
-                <MudTextField @bind-Value="FindingsEcosystem" Label="Ecosystem" Variant="Variant.Outlined" />
+                <MudTextField @bind-Value="FindingsEcosystem" Label="Ecosystem" Variant="Variant.Outlined" Immediate="true" OnKeyDown="OnFindingsFilterKeyDown" />
             </MudItem>
             <MudItem xs="12" md="3">
-                <MudTextField @bind-Value="FindingsSeverity" Label="Severity" Variant="Variant.Outlined" />
+                <MudTextField @bind-Value="FindingsSeverity" Label="Severity" Variant="Variant.Outlined" Immediate="true" OnKeyDown="OnFindingsFilterKeyDown" />
             </MudItem>
             <MudItem xs="12" md="3">
-                <MudSelect T="string?" @bind-Value="FindingsRepoId" Label="Repository" Variant="Variant.Outlined">
+                <MudSelect T="string?" Value="FindingsRepoId" ValueChanged="OnFindingsRepositoryFilterChanged" Label="Repository" Variant="Variant.Outlined">
                     <MudSelectItem Value="@((string?)null)">All</MudSelectItem>
                     @foreach (var repo in Repositories)
                     {
@@ -519,7 +673,12 @@
                     </details>
                 </MudTd>
                 <MudTd>@context.Type</MudTd>
-                <MudTd>@context.Ecosystem</MudTd>
+                <MudTd>
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                        <img src="@EcosystemIconPath(context.Ecosystem)" alt="@context.Ecosystem icon" class="ecosystem-icon" />
+                        <span>@context.Ecosystem</span>
+                    </MudStack>
+                </MudTd>
                 <MudTd>@context.PackageName</MudTd>
                 <MudTd>@context.InstalledVersion</MudTd>
                 <MudTd>@context.FixedVersion</MudTd>
@@ -576,7 +735,7 @@
         }
     </MudTabPanel>
 
-    <MudTabPanel Text="Configuration">
+    <MudTabPanel Text="Connections">
         <MudText Typo="Typo.h6">Connections</MudText>
 
         <MudPaper Class="pa-4 mt-3">
@@ -640,6 +799,53 @@
     </MudTabPanel>
 
     <MudTabPanel Text="Tools">
+        <MudPaper Class="pa-4 mb-4">
+            <MudText Typo="Typo.h6">About</MudText>
+            <MudText Typo="Typo.body2" Class="mb-2">Repo Analyzer version: <strong>@AppVersion</strong></MudText>
+            <MudTable Items="SupportedDistributions" Dense="true" Hover="true">
+                <HeaderContent>
+                    <MudTh></MudTh>
+                    <MudTh>Distribution</MudTh>
+                    <MudTh>Support</MudTh>
+                    <MudTh>Current Runtime</MudTh>
+                    <MudTh>Scanner</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>
+                        <img src="@context.IconPath" alt="@context.Name icon" class="ecosystem-icon" />
+                    </MudTd>
+                    <MudTd>@context.Name</MudTd>
+                    <MudTd>@context.SupportLevel</MudTd>
+                    <MudTd>@context.RuntimeVersion</MudTd>
+                    <MudTd>@context.ScannerTool</MudTd>
+                </RowTemplate>
+            </MudTable>
+        </MudPaper>
+
+        <MudPaper Class="pa-4 mb-4">
+            <MudText Typo="Typo.h6">Backup</MudText>
+            <MudText Typo="Typo.caption">Create or restore a backup zip containing all JSON data files.</MudText>
+
+            <MudGrid Class="mt-2">
+                <MudItem xs="12" md="4">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@BackupRestoreBusy" OnClick="CreateBackupAsync">Backup</MudButton>
+                </MudItem>
+                <MudItem xs="12" md="5" Class="d-flex align-center">
+                    <InputFile OnChange="OnRestoreFileSelected" accept=".zip" />
+                    <MudText Typo="Typo.caption" Class="ml-2">@RestoreFileName</MudText>
+                </MudItem>
+                <MudItem xs="12" md="3">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Disabled="@BackupRestoreBusy" OnClick="RestoreBackupAsync">Restore</MudButton>
+                </MudItem>
+            </MudGrid>
+
+            @if (BackupRestoreBusy)
+            {
+                <MudProgressLinear Class="mt-3" Indeterminate="true" Color="Color.Info" />
+                <MudText Typo="Typo.caption" Class="mt-1">@BackupRestoreStatusText</MudText>
+            }
+        </MudPaper>
+
         <MudText Typo="Typo.h6">Analysis Logs</MudText>
         <MudText Typo="Typo.caption">Latest file: @AnalysisLogs.FileName | Showing @AnalysisLogs.ReturnedLines lines</MudText>
 
@@ -698,6 +904,16 @@
 </MudTabs>
 
 @code {
+    private string AppVersion => Configuration["App:Version"] ?? "1.0.0";
+
+    private static readonly List<DistributionInfo> SupportedDistributions =
+    [
+        new() { Name = "NuGet", IconPath = "/images/nuget.png", SupportLevel = "Supported", RuntimeVersion = ".NET SDK 8.0.418", ScannerTool = "dotnet list package" },
+        new() { Name = "NPM", IconPath = "/images/npm.png", SupportLevel = "Supported", RuntimeVersion = "Node v18.20.4 / npm 9.2.0", ScannerTool = "npm audit + npm outdated" },
+        new() { Name = "Maven", IconPath = "/images/maven.png", SupportLevel = "Supported", RuntimeVersion = "Apache Maven 3.8.7 / OpenJDK 17.0.18", ScannerTool = "maven-versions + owasp-dependency-check" },
+        new() { Name = "PyPI (pip)", IconPath = "/images/pip.png", SupportLevel = "Supported", RuntimeVersion = "Python 3.11.2 / pip 23.0.1", ScannerTool = "pip list + pip-audit" }
+    ];
+
     private string? Error;
     private string? InfoMessage;
 
@@ -710,7 +926,9 @@
     private List<Component> Components = new();
     private List<GlobalFinding> GlobalFindings = new();
     private GlobalFinding? SelectedGlobalFinding;
-    private List<DashboardRow> DashboardRows = new();
+    private List<DashboardRiskRow> DashboardRiskRows = new();
+    private List<RepositoryEntity> DashboardNotAnalyzedRepos = new();
+    private List<AnalyzeRun> RecentRuns = new();
 
     private ConnectionUpsertRequest ConnectionForm = new() { Type = ConnectionType.GitHub };
     private DateTime? TokenExpiryDate;
@@ -727,11 +945,22 @@
     private string? LogLevelFilter;
     private string LogSortBy = "Timestamp";
     private bool LogSortDescending = true;
+    private bool BackupRestoreBusy;
+    private string BackupRestoreStatusText = string.Empty;
+    private IBrowserFile? RestoreFile;
+    private string RestoreFileName = "No file selected";
 
     private string? AnalyzeConnectionId;
     private string? AnalyzeRepositoryId;
     private AnalyzeRun? CurrentAnalyzeRun;
     private RepoAnalysisSnapshot? AnalyzeSnapshot;
+    private bool BatchIsRunning;
+    private bool BatchCancelRequested;
+    private int BatchTotalCount;
+    private int BatchCurrentIndex;
+    private int BatchCompletedCount;
+    private int BatchFailedCount;
+    private string? BatchCurrentRepoName;
 
     private string? RepoFetchConnectionId;
     private List<string> RepoFetchWorkspaceOptions = new();
@@ -758,6 +987,12 @@
             .OrderByDescending(SeverityRankForFilter)
             .ThenBy(x => x, StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+    private int DashboardTotalRepositories => Repositories.Count;
+    private int DashboardAnalyzedCount => Repositories.Count(r => LatestSnapshotsByRepo.ContainsKey(r.Id));
+    private int DashboardNotAnalyzedCount => DashboardTotalRepositories - DashboardAnalyzedCount;
+    private int DashboardVulnerabilities => Snapshots.Sum(s => s.Vulnerabilities.Count);
+    private int DashboardOutdated => Snapshots.Sum(s => s.Outdated.Count);
 
     private int ComponentsRowsPerPage
     {
@@ -786,6 +1021,16 @@
 
     private bool IsRepoFetchAdsConnection =>
         Connections.FirstOrDefault(x => x.Id == RepoFetchConnectionId)?.Type == ConnectionType.AzureDevOpsServer;
+
+    private string BatchSummaryText =>
+        BatchTotalCount <= 0
+            ? "No batch in progress."
+            : $"Analyzing repo {Math.Min(BatchCurrentIndex, BatchTotalCount)} of {BatchTotalCount}. Completed: {BatchCompletedCount}, Failed: {BatchFailedCount}.";
+
+    private double BatchTotalProgressPercent =>
+        BatchTotalCount <= 0
+            ? 0
+            : Math.Clamp((BatchCompletedCount / (double)BatchTotalCount) * 100d, 0d, 100d);
 
     private string AnalyzeStatusText =>
         CurrentAnalyzeRun is null
@@ -858,17 +1103,34 @@
 
         await LoadRepoFetchWorkspaceOptionsAsync();
 
-        DashboardRows = Snapshots
-            .OrderByDescending(s => s.AnalyzedAtUtc)
-            .Select(s => new DashboardRow
-            {
-                RepositoryName = RepositoryNameWithCount(s.RepositoryId),
-                AnalyzedAtUtc = s.AnalyzedAtUtc,
-                VulnerabilityCount = s.Vulnerabilities.Count,
-                OutdatedCount = s.Outdated.Count
-            })
-            .Where(x => x.VulnerabilityCount > 0 || x.OutdatedCount > 0)
+        DashboardNotAnalyzedRepos = Repositories
+            .Where(r => !LatestSnapshotsByRepo.ContainsKey(r.Id))
+            .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+        DashboardRiskRows = Snapshots
+            .Select(s => new
+            {
+                Snapshot = s,
+                HighestSeverity = HighestSeverityForSnapshot(s),
+                HasVulnerabilities = s.Vulnerabilities.Count > 0
+            })
+            .OrderByDescending(x => x.HasVulnerabilities)
+            .ThenByDescending(x => SeverityRank(x.HighestSeverity))
+            .ThenByDescending(x => x.Snapshot.Vulnerabilities.Count)
+            .ThenByDescending(x => x.Snapshot.Outdated.Count)
+            .Take(10)
+            .Select(x => new DashboardRiskRow
+            {
+                RepositoryId = x.Snapshot.RepositoryId,
+                RepositoryName = RepositoryName(x.Snapshot.RepositoryId),
+                HighestSeverity = x.HighestSeverity,
+                VulnerabilityCount = x.Snapshot.Vulnerabilities.Count,
+                OutdatedCount = x.Snapshot.Outdated.Count
+            })
+            .ToList();
+
+        RecentRuns = await Api.GetRecentAnalysisRunsAsync(20);
 
         await ReloadComponentsAsync();
         await ReloadFindingsAsync();
@@ -910,8 +1172,19 @@
 
     private async Task DeleteConnectionAsync(string id)
     {
+        var connectionName = Connections.FirstOrDefault(x => x.Id == id)?.Name ?? id;
+        var confirmed = await ConfirmDangerAsync(
+            "Delete Connection",
+            $"Delete connection '{connectionName}'?",
+            "Delete connection");
+        if (!confirmed)
+        {
+            return;
+        }
+
         await Api.DeleteConnectionAsync(id);
         await ReloadAsync();
+        InfoMessage = $"Connection '{connectionName}' deleted.";
     }
 
     private async Task TestConnectionAsync(string id)
@@ -975,7 +1248,10 @@
     private async Task DeleteRepositoryAsync(string repositoryId)
     {
         var repoName = Repositories.FirstOrDefault(x => x.Id == repositoryId)?.Name ?? repositoryId;
-        var confirmed = await Js.InvokeAsync<bool>("confirm", $"Delete repository '{repoName}' and all analyzed data for it?");
+        var confirmed = await ConfirmDangerAsync(
+            "Delete Repository",
+            $"Delete repository '{repoName}' and all analyzed data for it?",
+            "Delete repository");
         if (!confirmed)
         {
             return;
@@ -988,6 +1264,12 @@
 
     private async Task StartAnalyze(string repositoryId)
     {
+        if (BatchIsRunning)
+        {
+            Error = "Batch analysis is running. Wait for it to finish or cancel after current repository.";
+            return;
+        }
+
         Error = null;
         InfoMessage = null;
 
@@ -1003,6 +1285,178 @@
         await PollAnalysisRunAsync(CurrentAnalyzeRun.Id);
     }
 
+    private async Task StartAnalyzeAllForConnectionAsync(string connectionId)
+    {
+        if (BatchIsRunning)
+        {
+            return;
+        }
+
+        var repos = Repositories
+            .Where(r => r.ConnectionId == connectionId)
+            .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (repos.Count == 0)
+        {
+            Error = "No repositories found for this connection.";
+            return;
+        }
+
+        AnalyzeConnectionId = connectionId;
+        AnalyzeRepositoryId = repos[0].Id;
+        ActiveTabIndex = 1;
+        StateHasChanged();
+
+        await RunBatchAnalysisAsync(repos);
+    }
+
+    private async Task AnalyzeNextNotAnalyzedAsync()
+    {
+        if (BatchIsRunning || DashboardNotAnalyzedRepos.Count == 0)
+        {
+            return;
+        }
+
+        var next = DashboardNotAnalyzedRepos
+            .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+            .First();
+
+        AnalyzeConnectionId = next.ConnectionId;
+        AnalyzeRepositoryId = next.Id;
+        ActiveTabIndex = 1;
+        await StartAnalyze(next.Id);
+    }
+
+    private async Task AnalyzeAllNotAnalyzedAsync()
+    {
+        if (BatchIsRunning || DashboardNotAnalyzedRepos.Count == 0)
+        {
+            return;
+        }
+
+        var repos = DashboardNotAnalyzedRepos
+            .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        AnalyzeConnectionId = repos[0].ConnectionId;
+        AnalyzeRepositoryId = repos[0].Id;
+        ActiveTabIndex = 1;
+        StateHasChanged();
+
+        await RunBatchAnalysisAsync(repos);
+    }
+
+    private Task RequestBatchCancelAsync()
+    {
+        BatchCancelRequested = true;
+        return Task.CompletedTask;
+    }
+
+    private async Task RunBatchAnalysisAsync(List<RepositoryEntity> repos)
+    {
+        BatchIsRunning = true;
+        BatchCancelRequested = false;
+        BatchTotalCount = repos.Count;
+        BatchCurrentIndex = 0;
+        BatchCompletedCount = 0;
+        BatchFailedCount = 0;
+        BatchCurrentRepoName = null;
+        Error = null;
+        InfoMessage = null;
+
+        try
+        {
+            foreach (var repo in repos)
+            {
+                BatchCurrentIndex++;
+                BatchCurrentRepoName = repo.Name;
+                AnalyzeRepositoryId = repo.Id;
+                AnalyzeSnapshot = null;
+                StateHasChanged();
+
+                var run = await Api.StartAnalysisAsync(repo.Id);
+                if (run is null)
+                {
+                    BatchFailedCount++;
+                }
+                else
+                {
+                    var status = await MonitorRunToCompletionAsync(run.Id);
+                    if (string.Equals(status, "Completed", StringComparison.OrdinalIgnoreCase))
+                    {
+                        BatchCompletedCount++;
+                    }
+                    else
+                    {
+                        BatchFailedCount++;
+                    }
+                }
+
+                if (BatchCancelRequested)
+                {
+                    break;
+                }
+            }
+
+            await ReloadAsync();
+            LoadAnalyzeSnapshotForSelection();
+
+            if (BatchCancelRequested)
+            {
+                InfoMessage = $"Batch stopped after current repository. Completed: {BatchCompletedCount}, Failed: {BatchFailedCount}.";
+            }
+            else
+            {
+                InfoMessage = $"Batch completed. Completed: {BatchCompletedCount}, Failed: {BatchFailedCount}.";
+            }
+        }
+        catch (Exception ex)
+        {
+            Error = ex.Message;
+        }
+        finally
+        {
+            BatchIsRunning = false;
+            BatchCurrentRepoName = null;
+            CurrentAnalyzeRun = null;
+        }
+    }
+
+    private Task OpenFindingsForRepositoryAsync(string repositoryId)
+    {
+        FindingsRepoId = repositoryId;
+        ActiveTabIndex = 4;
+        return ReloadFindingsAsync();
+    }
+
+    private async Task<string> MonitorRunToCompletionAsync(string runId)
+    {
+        var status = "Unknown";
+
+        for (var i = 0; i < 240; i++)
+        {
+            var run = await Api.GetAnalysisRunAsync(runId);
+            if (run is null)
+            {
+                break;
+            }
+
+            CurrentAnalyzeRun = run;
+            status = run.Status;
+            StateHasChanged();
+
+            if (run.Status is "Completed" or "Failed")
+            {
+                break;
+            }
+
+            await Task.Delay(750);
+        }
+
+        return status;
+    }
+
     private async Task DeleteAnalyzeSnapshotAsync()
     {
         if (string.IsNullOrWhiteSpace(AnalyzeRepositoryId))
@@ -1010,7 +1464,10 @@
             return;
         }
 
-        var confirmed = await Js.InvokeAsync<bool>("confirm", "Delete latest analysis result for selected repository?");
+        var confirmed = await ConfirmDangerAsync(
+            "Delete Analysis Result",
+            "Delete latest analysis result for selected repository?",
+            "Delete result");
         if (!confirmed)
         {
             return;
@@ -1096,6 +1553,40 @@
         await ReloadComponentsAsync();
     }
 
+    private async Task OnComponentSeverityFilterChanged(string? value)
+    {
+        ComponentSeverityFilter = value;
+        await ReloadComponentsAsync();
+    }
+
+    private async Task OnComponentRepositoryFilterChanged(string? value)
+    {
+        ComponentRepositoryId = value;
+        await ReloadComponentsAsync();
+    }
+
+    private async Task OnFindingsRepositoryFilterChanged(string? value)
+    {
+        FindingsRepoId = value;
+        await ReloadFindingsAsync();
+    }
+
+    private async Task OnComponentsFilterKeyDown(KeyboardEventArgs args)
+    {
+        if (string.Equals(args.Key, "Enter", StringComparison.Ordinal))
+        {
+            await ReloadComponentsAsync();
+        }
+    }
+
+    private async Task OnFindingsFilterKeyDown(KeyboardEventArgs args)
+    {
+        if (string.Equals(args.Key, "Enter", StringComparison.Ordinal))
+        {
+            await ReloadFindingsAsync();
+        }
+    }
+
     private async Task ReloadFindingsAsync()
     {
         GlobalFindings = await Api.GetFindingsAsync(FindingsEcosystem, FindingsSeverity, FindingsRepoId);
@@ -1127,7 +1618,10 @@
 
     private async Task ClearLogsAsync()
     {
-        var confirmed = await Js.InvokeAsync<bool>("confirm", "Clear the current analysis log file?");
+        var confirmed = await ConfirmDangerAsync(
+            "Clear Analysis Logs",
+            "Clear the current analysis log file?",
+            "Clear logs");
         if (!confirmed)
         {
             return;
@@ -1136,6 +1630,104 @@
         await Api.ClearAnalysisLogsAsync();
         await ReloadLogsAsync();
         InfoMessage = "Analysis logs cleared.";
+    }
+
+    private async Task<bool> ConfirmDangerAsync(string title, string message, string confirmText)
+    {
+        var parameters = new DialogParameters
+        {
+            [nameof(ConfirmDialog.Message)] = message,
+            [nameof(ConfirmDialog.ConfirmText)] = confirmText,
+            [nameof(ConfirmDialog.CancelText)] = "Cancel",
+            [nameof(ConfirmDialog.ConfirmColor)] = Color.Error
+        };
+
+        var options = new DialogOptions
+        {
+            CloseButton = true,
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true
+        };
+
+        var dialog = DialogService.Show<ConfirmDialog>(title, parameters, options);
+        var result = await dialog.Result;
+        return !result.Canceled && result.Data is bool confirmed && confirmed;
+    }
+
+    private Task OnRestoreFileSelected(InputFileChangeEventArgs args)
+    {
+        RestoreFile = args.File;
+        RestoreFileName = RestoreFile?.Name ?? "No file selected";
+        return Task.CompletedTask;
+    }
+
+    private async Task CreateBackupAsync()
+    {
+        try
+        {
+            Error = null;
+            InfoMessage = null;
+            BackupRestoreBusy = true;
+            BackupRestoreStatusText = "Creating backup zip...";
+            StateHasChanged();
+
+            var backup = await Api.DownloadBackupAsync();
+            BackupRestoreStatusText = "Downloading backup...";
+            await Js.InvokeVoidAsync(
+                "repoAnalyzer.downloadFileFromBase64",
+                backup.FileName,
+                "application/zip",
+                Convert.ToBase64String(backup.Bytes));
+
+            InfoMessage = $"Backup '{backup.FileName}' downloaded.";
+        }
+        catch (Exception ex)
+        {
+            Error = ex.Message;
+        }
+        finally
+        {
+            BackupRestoreBusy = false;
+            BackupRestoreStatusText = string.Empty;
+        }
+    }
+
+    private async Task RestoreBackupAsync()
+    {
+        if (RestoreFile is null)
+        {
+            Error = "Choose a backup zip file first.";
+            return;
+        }
+
+        try
+        {
+            Error = null;
+            InfoMessage = null;
+            BackupRestoreBusy = true;
+            BackupRestoreStatusText = "Uploading backup zip...";
+            StateHasChanged();
+
+            await using var stream = RestoreFile.OpenReadStream(100 * 1024 * 1024);
+            var result = await Api.RestoreBackupAsync(RestoreFile.Name, stream);
+            BackupRestoreStatusText = "Applying restored data...";
+
+            await ReloadAsync();
+
+            var restoredCount = result?.RestoredFileCount ?? 0;
+            InfoMessage = restoredCount > 0
+                ? $"Restore completed. Restored {restoredCount} JSON files."
+                : "Restore completed. No JSON files were restored from the zip.";
+        }
+        catch (Exception ex)
+        {
+            Error = ex.Message;
+        }
+        finally
+        {
+            BackupRestoreBusy = false;
+            BackupRestoreStatusText = string.Empty;
+        }
     }
 
     private void OnExpiryChanged(DateTime? value)
@@ -1715,6 +2307,31 @@
             _ => 0
         };
 
+    private static string HighestSeverityForSnapshot(RepoAnalysisSnapshot snapshot)
+    {
+        if (snapshot.Vulnerabilities.Count == 0)
+        {
+            return snapshot.Outdated.Count > 0 ? "Outdated" : "OK";
+        }
+
+        return snapshot.Vulnerabilities
+            .Select(v => NormalizeSeverity(v.Severity))
+            .OrderByDescending(SeverityRank)
+            .FirstOrDefault() ?? "Unknown";
+    }
+
+    private static string SeverityChipStyle(string severity)
+        => severity switch
+        {
+            "Critical" => "background-color:#ffcdd2;color:#111;",
+            "High" => "background-color:#ffd9cc;color:#111;",
+            "Medium" => "background-color:#ffd59e;color:#111;",
+            "Low" => "background-color:#fff9c4;color:#111;",
+            "Outdated" => "background-color:#f2f2f2;color:#111;",
+            "OK" => "background-color:#e8f5e9;color:#111;",
+            _ => "background-color:#eceff1;color:#111;"
+        };
+
     private static int SeverityRankForFilter(string severity)
         => severity switch
         {
@@ -1730,6 +2347,112 @@
 
     private string RepositoryName(string repositoryId)
         => Repositories.FirstOrDefault(r => r.Id == repositoryId)?.Name ?? repositoryId;
+
+    private string ConnectionName(string connectionId)
+        => Connections.FirstOrDefault(c => c.Id == connectionId)?.Name ?? connectionId;
+
+    private string ConnectionHeader(ConnectionView connection)
+    {
+        var repoCount = Repositories.Count(r => r.ConnectionId == connection.Id);
+        return $"{connection.Name} ({ConnectionTypeLabel(connection.Type)}) {repoCount} repositories";
+    }
+
+    private static string FormatRunDuration(AnalyzeRun run)
+    {
+        var end = run.CompletedAtUtc ?? run.UpdatedAtUtc;
+        var duration = end - run.StartedAtUtc;
+
+        if (duration.TotalSeconds < 0)
+        {
+            return "-";
+        }
+
+        if (duration.TotalMinutes < 1)
+        {
+            return $"{Math.Round(duration.TotalSeconds)}s";
+        }
+
+        if (duration.TotalHours < 1)
+        {
+            return $"{Math.Floor(duration.TotalMinutes)}m {duration.Seconds}s";
+        }
+
+        return $"{Math.Floor(duration.TotalHours)}h {duration.Minutes}m";
+    }
+
+    private static string ConnectionTypeLabel(ConnectionType type)
+        => type switch
+        {
+            ConnectionType.GitHub => "GitHub",
+            ConnectionType.AzureDevOpsServer => "Azure DevOps Server",
+            _ => type.ToString()
+        };
+
+    private static string EcosystemIconPath(string ecosystem)
+    {
+        if (ecosystem.Equals("NuGet", StringComparison.OrdinalIgnoreCase))
+        {
+            return "/images/nuget.png";
+        }
+
+        if (ecosystem.Equals("npm", StringComparison.OrdinalIgnoreCase))
+        {
+            return "/images/npm.png";
+        }
+
+        if (ecosystem.Equals("maven", StringComparison.OrdinalIgnoreCase))
+        {
+            return "/images/maven.png";
+        }
+
+        if (ecosystem.Equals("python", StringComparison.OrdinalIgnoreCase) ||
+            ecosystem.Contains("pip", StringComparison.OrdinalIgnoreCase))
+        {
+            return "/images/pip.png";
+        }
+
+        return "/images/nodejs.png";
+    }
+
+    private static string ProjectIconPath(DetectedProject project)
+    {
+        var projectType = project.ProjectType ?? string.Empty;
+        var framework = project.Framework ?? string.Empty;
+        var language = project.Language ?? string.Empty;
+
+        if (projectType.Contains("framework", StringComparison.OrdinalIgnoreCase) ||
+            framework.StartsWith("net4", StringComparison.OrdinalIgnoreCase))
+        {
+            return "/images/dotnet-framework.png";
+        }
+
+        if (projectType.Contains(".NET", StringComparison.OrdinalIgnoreCase) ||
+            language.Equals("C#", StringComparison.OrdinalIgnoreCase) ||
+            language.Equals("F#", StringComparison.OrdinalIgnoreCase))
+        {
+            return "/images/dotnet.png";
+        }
+
+        if (language.Equals("JavaScript", StringComparison.OrdinalIgnoreCase) ||
+            language.Equals("TypeScript", StringComparison.OrdinalIgnoreCase) ||
+            projectType.Contains("node", StringComparison.OrdinalIgnoreCase))
+        {
+            return "/images/nodejs.png";
+        }
+
+        if (language.Equals("Java", StringComparison.OrdinalIgnoreCase) ||
+            projectType.Contains("maven", StringComparison.OrdinalIgnoreCase))
+        {
+            return "/images/java.png";
+        }
+
+        if (language.Equals("Python", StringComparison.OrdinalIgnoreCase))
+        {
+            return "/images/python.png";
+        }
+
+        return "/images/nodejs.png";
+    }
 
     private string RepositoryNameWithCount(string repositoryId)
     {
@@ -1833,10 +2556,11 @@
         }
     }
 
-    private sealed class DashboardRow
+    private sealed class DashboardRiskRow
     {
+        public string RepositoryId { get; set; } = string.Empty;
         public string RepositoryName { get; set; } = string.Empty;
-        public DateTimeOffset AnalyzedAtUtc { get; set; }
+        public string HighestSeverity { get; set; } = "Unknown";
         public int VulnerabilityCount { get; set; }
         public int OutdatedCount { get; set; }
     }
@@ -1889,5 +2613,14 @@
         public string ProviderType { get; set; } = string.Empty;
         public string Step { get; set; } = string.Empty;
         public string Message { get; set; } = string.Empty;
+    }
+
+    private sealed class DistributionInfo
+    {
+        public string Name { get; set; } = string.Empty;
+        public string IconPath { get; set; } = string.Empty;
+        public string SupportLevel { get; set; } = string.Empty;
+        public string RuntimeVersion { get; set; } = string.Empty;
+        public string ScannerTool { get; set; } = string.Empty;
     }
 }

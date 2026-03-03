@@ -20,6 +20,7 @@ public sealed class AnalyzeRunService
         {
             RepositoryId = repositoryId,
             Status = "Queued",
+            StartedAtUtc = DateTimeOffset.UtcNow,
             UpdatedAtUtc = DateTimeOffset.UtcNow,
             CurrentStep = "Queued",
             CurrentMessage = "Analysis run queued for execution.",
@@ -58,6 +59,7 @@ public sealed class AnalyzeRunService
 
                 run.Snapshot = await analyzer.AnalyzeRepositoryAsync(repositoryId, run.Id, progress);
                 run.Status = "Completed";
+                run.CompletedAtUtc = DateTimeOffset.UtcNow;
                 run.CurrentStep = "Completed";
                 run.CurrentMessage = "Analysis completed successfully.";
                 run.ProgressPercent = 100;
@@ -66,6 +68,7 @@ public sealed class AnalyzeRunService
             catch (Exception ex)
             {
                 run.Status = "Failed";
+                run.CompletedAtUtc = DateTimeOffset.UtcNow;
                 run.Error = "Analysis failed. Check Tools > Analysis Logs for details.";
                 run.CurrentStep = "Failed";
                 run.CurrentMessage = "Analysis failed.";
@@ -101,4 +104,10 @@ public sealed class AnalyzeRunService
         _runs.TryGetValue(runId, out var run);
         return run;
     }
+
+    public List<AnalyzeRun> GetRecent(int take = 20)
+        => _runs.Values
+            .OrderByDescending(x => x.UpdatedAtUtc)
+            .Take(Math.Clamp(take, 1, 200))
+            .ToList();
 }
