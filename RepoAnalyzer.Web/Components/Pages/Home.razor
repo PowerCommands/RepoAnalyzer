@@ -1,15 +1,60 @@
 @page "/"
 @using System.Text.Json
 @using Microsoft.AspNetCore.Components.Web
+@using Markdig
 @using RepoAnalyzer.Web.Components.Shared
 @inject InternalApiClient Api
 @inject IJSRuntime Js
 @inject IDialogService DialogService
 @inject IConfiguration Configuration
+@inject IWebHostEnvironment Env
 
 <PageTitle>Repo Analyzer</PageTitle>
 
-<MudText Typo="Typo.h4" Class="mb-4">Repo Analyzer</MudText>
+<MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-3">
+    <MudText Typo="Typo.h4">Repo Analyzer</MudText>
+    <MudMenu Dense="true" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
+        <ActivatorContent>
+            <MudBadge Content="@SystemAlerts.Count" Color="Color.Error" Overlap="true" Bordered="true" Invisible="@(SystemAlerts.Count == 0)">
+                <MudIconButton Icon="@Icons.Material.Filled.Notifications" Color="Color.Default" />
+            </MudBadge>
+        </ActivatorContent>
+        <ChildContent>
+            <MudStack Class="pa-2" Style="min-width:360px;max-width:420px;">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                    <MudText Typo="Typo.subtitle2">Notifications</MudText>
+                    <MudButton Variant="Variant.Text" Size="Size.Small" Disabled="@(SystemAlerts.Count == 0)" OnClick="ClearNotifications">Clear</MudButton>
+                </MudStack>
+                @if (SystemAlerts.Count == 0)
+                {
+                    <MudText Typo="Typo.caption">No active alerts.</MudText>
+                }
+                else
+                {
+                    @foreach (var alert in SystemAlerts.Take(20))
+                    {
+                        <MudPaper Class="pa-2 mt-2" Style="background-color:#fafafa;">
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                <MudChip Color="@AlertChipColor(alert.Severity)" Size="Size.Small">@alert.Severity</MudChip>
+                                <MudText Typo="Typo.caption">@alert.Category</MudText>
+                            </MudStack>
+                            <MudText Typo="Typo.caption" Class="mt-1">@alert.Message</MudText>
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mt-1">
+                                <MudText Typo="Typo.caption">@alert.TimestampUtcText</MudText>
+                                @if (alert.ActionKind != AlertActionKind.None)
+                                {
+                                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Info" OnClick="() => OpenAlertActionAsync(alert)">
+                                        @(alert.ActionKind == AlertActionKind.OpenConnections ? "Open connections" : "Open findings")
+                                    </MudButton>
+                                }
+                            </MudStack>
+                        </MudPaper>
+                    }
+                }
+            </MudStack>
+        </ChildContent>
+    </MudMenu>
+</MudStack>
 
 @if (!string.IsNullOrWhiteSpace(Error))
 {
@@ -812,7 +857,6 @@
                 <HeaderContent>
                     <MudTh></MudTh>
                     <MudTh>Distribution</MudTh>
-                    <MudTh>Support</MudTh>
                     <MudTh>Current Runtime</MudTh>
                     <MudTh>Scanner</MudTh>
                 </HeaderContent>
@@ -821,7 +865,6 @@
                         <img src="@context.IconPath" alt="@context.Name icon" class="ecosystem-icon" />
                     </MudTd>
                     <MudTd>@context.Name</MudTd>
-                    <MudTd>@context.SupportLevel</MudTd>
                     <MudTd>@context.RuntimeVersion</MudTd>
                     <MudTd>@context.ScannerTool</MudTd>
                 </RowTemplate>
@@ -907,6 +950,12 @@
             </NoRecordsContent>
         </MudTable>
     </MudTabPanel>
+
+    <MudTabPanel Text="Help">
+        <MudPaper Class="pa-4 help-markdown">
+            @((MarkupString)HelpHtml)
+        </MudPaper>
+    </MudTabPanel>
 </MudTabs>
 
 @code {
@@ -914,10 +963,10 @@
 
     private static readonly List<DistributionInfo> SupportedDistributions =
     [
-        new() { Name = "NuGet", IconPath = "/images/nuget.png", SupportLevel = "Supported", RuntimeVersion = ".NET SDK 8.0.418", ScannerTool = "dotnet list package" },
-        new() { Name = "NPM", IconPath = "/images/npm.png", SupportLevel = "Supported", RuntimeVersion = "Node v18.20.4 / npm 9.2.0", ScannerTool = "npm audit + npm outdated" },
-        new() { Name = "Maven", IconPath = "/images/maven.png", SupportLevel = "Supported", RuntimeVersion = "Apache Maven 3.8.7 / OpenJDK 17.0.18", ScannerTool = "maven-versions + owasp-dependency-check" },
-        new() { Name = "PyPI (pip)", IconPath = "/images/pip.png", SupportLevel = "Supported", RuntimeVersion = "Python 3.11.2 / pip 23.0.1", ScannerTool = "pip list + pip-audit" }
+        new() { Name = "NuGet", IconPath = "/images/nuget.png", RuntimeVersion = ".NET SDK 8.0.418", ScannerTool = "dotnet list package" },
+        new() { Name = "NPM", IconPath = "/images/npm.png", RuntimeVersion = "Node v18.20.4 / npm 9.2.0", ScannerTool = "npm audit + npm outdated" },
+        new() { Name = "Maven", IconPath = "/images/maven.png", RuntimeVersion = "Apache Maven 3.8.7 / OpenJDK 17.0.18", ScannerTool = "maven-versions + owasp-dependency-check" },
+        new() { Name = "PyPI (pip)", IconPath = "/images/pip.png", RuntimeVersion = "Python 3.11.2 / pip 23.0.1", ScannerTool = "pip list + pip-audit" }
     ];
 
     private string? Error;
@@ -978,12 +1027,16 @@
     private List<TransitiveDependencyRow> SelectedComponentTransitiveRows = new();
     private List<TransitiveDependencyRow> SelectedFindingTransitiveRows = new();
     private List<LogEntryRow> LogEntries = new();
+    private List<SystemAlertRow> SystemAlerts = new();
     private Dictionary<string, int> FindingEffectiveWeightByKey = new(StringComparer.Ordinal);
     private Dictionary<string, string> FindingEffectiveStatusByKey = new(StringComparer.Ordinal);
     private Dictionary<string, bool> FindingInheritedFromTransitiveByKey = new(StringComparer.Ordinal);
     private int _componentsRowsPerPage = 100;
     private int _findingsRowsPerPage = 100;
     private bool _prefsLoaded;
+    private bool _helpLoaded;
+    private string HelpHtml = "<p>Loading README...</p>";
+    private DateTimeOffset? _alertsClearedAtUtc;
 
     private List<string> ComponentSeverityOptions =>
         ComponentRows
@@ -1091,6 +1144,10 @@
         Workspaces = await Api.GetWorkspacesAsync();
         Repositories = await Api.GetRepositoriesAsync();
         Snapshots = await Api.GetSnapshotsAsync();
+        if (!_helpLoaded)
+        {
+            await LoadHelpHtmlAsync();
+        }
         var storageStats = await Api.GetDataStorageStatsAsync();
         DashboardJsonTotalBytes = storageStats.TotalJsonBytes;
 
@@ -1146,6 +1203,7 @@
         await ReloadFindingsAsync();
         await ReloadLogsAsync();
         LoadAnalyzeSnapshotForSelection();
+        RebuildSystemAlerts();
     }
 
     private async Task SaveConnectionAsync()
@@ -1624,6 +1682,198 @@
             .Where(x => x is not null)
             .Select(x => x!)
             .ToList();
+        RebuildSystemAlerts();
+    }
+
+    private async Task LoadHelpHtmlAsync()
+    {
+        try
+        {
+            var readmePath = Path.Combine(Env.ContentRootPath, "README.md");
+            if (!File.Exists(readmePath))
+            {
+                HelpHtml = "<p>README.md was not found in this deployment.</p>";
+                _helpLoaded = true;
+                return;
+            }
+
+            var markdown = await File.ReadAllTextAsync(readmePath);
+            HelpHtml = Markdown.ToHtml(markdown);
+            _helpLoaded = true;
+        }
+        catch (Exception ex)
+        {
+            HelpHtml = $"<p>Failed to load README.md: {ex.Message}</p>";
+            _helpLoaded = true;
+        }
+    }
+
+    private void RebuildSystemAlerts()
+    {
+        var alerts = new List<SystemAlertRow>();
+
+        alerts.AddRange(LogEntries
+            .Where(IsWarningOrHigher)
+            .Select(row => new SystemAlertRow
+            {
+                Severity = NormalizeAlertSeverity(row.Level),
+                Category = "Log",
+                Message = $"{row.Step}: {row.Message}",
+                TimestampUtcText = row.TimestampUtc,
+                SortTimestamp = ParseTimestampOrMin(row.TimestampUtc),
+                RepositoryId = row.RepositoryId,
+                ActionKind = string.IsNullOrWhiteSpace(row.RepositoryId) ? AlertActionKind.None : AlertActionKind.OpenFindings
+            }));
+
+        var now = DateTimeOffset.UtcNow;
+        alerts.AddRange(Connections
+            .Where(c => c.TokenExpiresAt.HasValue)
+            .Where(c => c.TokenExpiresAt!.Value <= now.AddDays(3))
+            .Select(c =>
+            {
+                var isExpired = c.TokenExpiresAt!.Value <= now;
+                return new SystemAlertRow
+                {
+                    Severity = isExpired ? "Error" : "Warning",
+                    Category = "Token",
+                    Message = isExpired
+                        ? $"Connection '{c.Name}' token has expired ({c.TokenExpiresAt.Value:u})."
+                        : $"Connection '{c.Name}' token expires soon ({c.TokenExpiresAt.Value:u}).",
+                    TimestampUtcText = c.TokenExpiresAt.Value.ToString("u"),
+                    SortTimestamp = c.TokenExpiresAt.Value,
+                    ActionKind = AlertActionKind.OpenConnections
+                };
+            }));
+
+        var latestCompletionByRepo = LogEntries
+            .Where(x => string.Equals(x.Step, "RunVulnerabilityScans", StringComparison.OrdinalIgnoreCase))
+            .Where(x => x.Message.Contains("completed", StringComparison.OrdinalIgnoreCase))
+            .Where(x => !string.IsNullOrWhiteSpace(x.RepositoryId))
+            .GroupBy(x => x.RepositoryId!, StringComparer.Ordinal)
+            .Select(g => g.OrderByDescending(x => ParseTimestampOrMin(x.TimestampUtc)).First())
+            .ToDictionary(x => x.RepositoryId!, x => x, StringComparer.Ordinal);
+
+        foreach (var snapshot in Snapshots)
+        {
+            var highest = HighestSeverityForSnapshot(snapshot);
+            if (SeverityRank(highest) < SeverityRank("High"))
+            {
+                continue;
+            }
+
+            if (!latestCompletionByRepo.TryGetValue(snapshot.RepositoryId, out var completionLog))
+            {
+                continue;
+            }
+
+            alerts.Add(new SystemAlertRow
+            {
+                Severity = highest,
+                Category = "Vulnerability",
+                Message = $"Repository '{RepositoryName(snapshot.RepositoryId)}' has {highest} severity vulnerabilities.",
+                TimestampUtcText = completionLog.TimestampUtc,
+                SortTimestamp = ParseTimestampOrMin(completionLog.TimestampUtc),
+                RepositoryId = snapshot.RepositoryId,
+                ActionKind = AlertActionKind.OpenFindings
+            });
+        }
+
+        SystemAlerts = alerts
+            .OrderByDescending(x => AlertSortWeight(x.Severity))
+            .ThenByDescending(x => x.SortTimestamp)
+            .ThenBy(x => x.Message, StringComparer.OrdinalIgnoreCase)
+            .DistinctBy(x => $"{x.Category}|{x.Message}|{x.RepositoryId}", StringComparer.OrdinalIgnoreCase)
+            .Where(x => !_alertsClearedAtUtc.HasValue || x.SortTimestamp > _alertsClearedAtUtc.Value)
+            .Take(100)
+            .ToList();
+    }
+
+    private static bool IsWarningOrHigher(LogEntryRow row)
+    {
+        var level = row.Level ?? string.Empty;
+        return level.Equals("Warning", StringComparison.OrdinalIgnoreCase) ||
+               level.Equals("Error", StringComparison.OrdinalIgnoreCase) ||
+               level.Equals("Critical", StringComparison.OrdinalIgnoreCase) ||
+               level.Equals("Fatal", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeAlertSeverity(string level)
+    {
+        if (level.Equals("Fatal", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Critical";
+        }
+
+        if (level.Equals("Error", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Error";
+        }
+
+        if (level.Equals("Warning", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Warning";
+        }
+
+        return level;
+    }
+
+    private static DateTimeOffset ParseTimestampOrMin(string? value)
+    {
+        if (DateTimeOffset.TryParse(value, out var parsed))
+        {
+            return parsed;
+        }
+
+        return DateTimeOffset.MinValue;
+    }
+
+    private static int AlertSortWeight(string severity)
+        => severity switch
+        {
+            "Critical" => 500,
+            "High" => 450,
+            "Error" => 400,
+            "Warning" => 300,
+            "Medium" => 250,
+            "Low" => 200,
+            _ => 100
+        };
+
+    private Color AlertChipColor(string severity)
+        => severity switch
+        {
+            "Critical" => Color.Error,
+            "High" => Color.Error,
+            "Error" => Color.Error,
+            "Warning" => Color.Warning,
+            "Medium" => Color.Warning,
+            "Low" => Color.Info,
+            _ => Color.Default
+        };
+
+    private void OpenConnectionsTab()
+    {
+        ActiveTabIndex = 5;
+    }
+
+    private void ClearNotifications()
+    {
+        _alertsClearedAtUtc = DateTimeOffset.UtcNow;
+        RebuildSystemAlerts();
+    }
+
+    private async Task OpenAlertActionAsync(SystemAlertRow alert)
+    {
+        if (alert.ActionKind == AlertActionKind.OpenConnections)
+        {
+            OpenConnectionsTab();
+            return;
+        }
+
+        if (alert.ActionKind == AlertActionKind.OpenFindings && !string.IsNullOrWhiteSpace(alert.RepositoryId))
+        {
+            await OpenFindingsForRepositoryAsync(alert.RepositoryId);
+        }
     }
 
     private async Task ClearLogsAsync()
@@ -2549,6 +2799,7 @@
                 TimestampUtc = root.TryGetProperty("TimestampUtc", out var ts) ? ts.GetString() ?? string.Empty : string.Empty,
                 Level = root.TryGetProperty("Level", out var lvl) ? lvl.GetString() ?? string.Empty : string.Empty,
                 ProviderType = root.TryGetProperty("ProviderType", out var provider) ? provider.GetString() ?? string.Empty : string.Empty,
+                RepositoryId = root.TryGetProperty("RepositoryId", out var repositoryId) ? repositoryId.GetString() ?? string.Empty : string.Empty,
                 Step = root.TryGetProperty("Step", out var step) ? step.GetString() ?? string.Empty : string.Empty,
                 Message = root.TryGetProperty("Message", out var message) ? message.GetString() ?? string.Empty : string.Empty
             };
@@ -2560,6 +2811,7 @@
                 TimestampUtc = string.Empty,
                 Level = "Unknown",
                 ProviderType = string.Empty,
+                RepositoryId = string.Empty,
                 Step = "Unparsed",
                 Message = line
             };
@@ -2621,6 +2873,7 @@
         public string TimestampUtc { get; set; } = string.Empty;
         public string Level { get; set; } = string.Empty;
         public string ProviderType { get; set; } = string.Empty;
+        public string RepositoryId { get; set; } = string.Empty;
         public string Step { get; set; } = string.Empty;
         public string Message { get; set; } = string.Empty;
     }
@@ -2629,8 +2882,25 @@
     {
         public string Name { get; set; } = string.Empty;
         public string IconPath { get; set; } = string.Empty;
-        public string SupportLevel { get; set; } = string.Empty;
         public string RuntimeVersion { get; set; } = string.Empty;
         public string ScannerTool { get; set; } = string.Empty;
+    }
+
+    private sealed class SystemAlertRow
+    {
+        public string Severity { get; set; } = string.Empty;
+        public string Category { get; set; } = string.Empty;
+        public string Message { get; set; } = string.Empty;
+        public string TimestampUtcText { get; set; } = string.Empty;
+        public DateTimeOffset SortTimestamp { get; set; }
+        public string? RepositoryId { get; set; }
+        public AlertActionKind ActionKind { get; set; }
+    }
+
+    private enum AlertActionKind
+    {
+        None = 0,
+        OpenFindings = 1,
+        OpenConnections = 2
     }
 }

@@ -41,3 +41,27 @@ main {
         max-width: 20% !important;
     }
 }
+
+.help-markdown h1,
+.help-markdown h2,
+.help-markdown h3 {
+    margin-top: 1rem;
+}
+
+.help-markdown p,
+.help-markdown li {
+    line-height: 1.5;
+}
+
+.help-markdown code {
+    background: #f5f7fa;
+    padding: 0.1rem 0.3rem;
+    border-radius: 4px;
+}
+
+.help-markdown pre {
+    background: #f5f7fa;
+    padding: 0.75rem;
+    border-radius: 6px;
+    overflow-x: auto;
+}

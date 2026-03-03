@@ -34,7 +34,11 @@ public static class InternalApiEndpoints
         group.MapPost("/connections/{id}/fetch-repositories", async (string id, FetchRepositoriesRequest? request, RepositorySyncService sync, CancellationToken ct) =>
         {
             var result = await sync.FetchNewRepositoriesAsync(id, request?.WorkspaceNames, ct);
-            return Results.Ok(result);
+            return Results.Ok(new
+            {
+                AddedWorkspaces = result.AddedWorkspaces,
+                AddedRepositories = result.AddedRepositories
+            });
         });
 
         group.MapPost("/connections/{id}/test", async (string id, ConnectionValidationService service, CancellationToken ct) =>
