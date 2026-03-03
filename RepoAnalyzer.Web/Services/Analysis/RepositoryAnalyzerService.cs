@@ -373,8 +373,9 @@ public sealed class RepositoryAnalyzerService
                     }
                     else
                     {
-                        var pyFindings = await _pythonCliInspector.AnalyzeOutdatedAsync(repositoryId, project.Id, analysisRoot, requirementsPath, requirementsContent, ct);
-                        outdated.AddRange(pyFindings);
+                        var pyResult = await _pythonCliInspector.AnalyzeAsync(repositoryId, project.Id, analysisRoot, requirementsPath, requirementsContent, ct);
+                        vulnerabilities.AddRange(pyResult.Vulnerabilities);
+                        outdated.AddRange(pyResult.Outdated);
 
                         scannerTimer.Stop();
                         await _analysisLog.InfoAsync(
@@ -386,7 +387,8 @@ public sealed class RepositoryAnalyzerService
                                 ["projectId"] = project.Id,
                                 ["projectPath"] = requirementsPath,
                                 ["scanner"] = nameof(PythonCliInspector),
-                                ["outdated"] = pyFindings.Count,
+                                ["vulnerabilities"] = pyResult.Vulnerabilities.Count,
+                                ["outdated"] = pyResult.Outdated.Count,
                                 ["elapsedMs"] = scannerTimer.ElapsedMilliseconds
                             },
                             ct);

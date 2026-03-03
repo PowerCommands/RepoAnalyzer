@@ -12,7 +12,7 @@ FROM mcr.microsoft.com/dotnet/sdk:8.0 AS final
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends nodejs npm ca-certificates maven openjdk-17-jre-headless \
+    && apt-get install -y --no-install-recommends nodejs npm ca-certificates maven openjdk-17-jre-headless python3 python3-pip python3-venv python-is-python3 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -u 10001 appuser \
