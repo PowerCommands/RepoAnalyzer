@@ -34,3 +34,10 @@ main {
     object-fit: contain;
     vertical-align: middle;
 }
+
+@media (min-width: 1200px) {
+    .dashboard-stats-grid .dashboard-stat-item {
+        flex: 0 0 20% !important;
+        max-width: 20% !important;
+    }
+}
