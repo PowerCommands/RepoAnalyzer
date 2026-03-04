@@ -9,13 +9,13 @@
 @inject IConfiguration Configuration
 @inject IWebHostEnvironment Env
 
-<PageTitle>Repo Analyzer</PageTitle>
+<PageTitle>@AppName</PageTitle>
 
 <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-3">
-    <MudText Typo="Typo.h4">Repo Analyzer</MudText>
+    <MudText Typo="Typo.h4">@AppName</MudText>
     <MudMenu Dense="true" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
         <ActivatorContent>
-            <MudBadge Content="@SystemAlerts.Count" Color="Color.Error" Overlap="true" Bordered="true" Invisible="@(SystemAlerts.Count == 0)">
+            <MudBadge Content="@SystemAlerts.Count" Color="Color.Error" Overlap="true" Bordered="true" Visible="@(SystemAlerts.Count != 0)">
                 <MudIconButton Icon="@Icons.Material.Filled.Notifications" Color="Color.Default" />
             </MudBadge>
         </ActivatorContent>
@@ -35,7 +35,7 @@
                     {
                         <MudPaper Class="pa-2 mt-2" Style="background-color:#fafafa;">
                             <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
-                                <MudChip Color="@AlertChipColor(alert.Severity)" Size="Size.Small">@alert.Severity</MudChip>
+                                <MudChip T="string" Color="@AlertChipColor(alert.Severity)" Size="Size.Small">@alert.Severity</MudChip>
                                 <MudText Typo="Typo.caption">@alert.Category</MudText>
                             </MudStack>
                             <MudText Typo="Typo.caption" Class="mt-1">@alert.Message</MudText>
@@ -66,7 +66,7 @@
     <MudAlert Severity="Severity.Info" Dense="true" Class="mb-4">@InfoMessage</MudAlert>
 }
 
-<MudTabs Rounded="true" PanelClass="pa-4" @bind-ActivePanelIndex="ActiveTabIndex">
+<MudTabs Rounded="true" TabPanelsClass="pa-4" @bind-ActivePanelIndex="ActiveTabIndex">
     <MudTabPanel Text="Dashboard">
         <MudGrid Class="dashboard-stats-grid">
             <MudItem xs="12" sm="6" md="3" Class="dashboard-stat-item">
@@ -118,7 +118,7 @@
                 <RowTemplate>
                     <MudTd>@context.Name</MudTd>
                     <MudTd>@ConnectionName(context.ConnectionId)</MudTd>
-                    <MudTd><MudChip Color="Color.Warning" Size="Size.Small">Not Analyzed</MudChip></MudTd>
+                    <MudTd><MudChip T="string" Color="Color.Warning" Size="Size.Small">Not Analyzed</MudChip></MudTd>
                 </RowTemplate>
                 <NoRecordsContent>
                     <MudText Typo="Typo.caption">All repositories are analyzed.</MudText>
@@ -139,7 +139,7 @@
                 <RowTemplate>
                     <MudTd>@context.RepositoryName</MudTd>
                     <MudTd>
-                        <MudChip Size="Size.Small" Style="@SeverityChipStyle(context.HighestSeverity)">
+                        <MudChip T="string" Size="Size.Small" Style="@SeverityChipStyle(context.HighestSeverity)">
                             @context.HighestSeverity
                         </MudChip>
                     </MudTd>
@@ -164,7 +164,7 @@
                 </HeaderContent>
                 <RowTemplate>
                     <MudTd>@RepositoryName(context.RepositoryId)</MudTd>
-                    <MudTd><MudChip Color="@RunStatusColor(context.Status)" Size="Size.Small">@context.Status</MudChip></MudTd>
+                    <MudTd><MudChip T="string" Color="@RunStatusColor(context.Status)" Size="Size.Small">@context.Status</MudChip></MudTd>
                     <MudTd>@context.StartedAtUtc.ToString("u")</MudTd>
                     <MudTd>@context.UpdatedAtUtc.ToString("u")</MudTd>
                     <MudTd>@FormatRunDuration(context)</MudTd>
@@ -174,286 +174,6 @@
                 </NoRecordsContent>
             </MudTable>
         </MudPaper>
-    </MudTabPanel>
-
-    <MudTabPanel Text="Analyze">
-        <MudText Typo="Typo.h6">Run Analysis</MudText>
-        <MudGrid Class="mt-2">
-            <MudItem xs="12" md="4">
-                <MudSelect T="string" Value="AnalyzeConnectionId" ValueChanged="OnAnalyzeConnectionChanged" Label="Connection" Variant="Variant.Outlined">
-                    @foreach (var connection in Connections)
-                    {
-                        <MudSelectItem Value="@connection.Id">@connection.Name</MudSelectItem>
-                    }
-                </MudSelect>
-            </MudItem>
-            <MudItem xs="12" md="6">
-                <MudSelect T="string" Value="AnalyzeRepositoryId" ValueChanged="OnAnalyzeRepositoryChanged" Label="Repository" Variant="Variant.Outlined">
-                    @foreach (var repo in AnalyzeRepositories)
-                    {
-                        <MudSelectItem Value="@repo.Id">@RepoSelectorLabel(repo)</MudSelectItem>
-                    }
-                </MudSelect>
-            </MudItem>
-            <MudItem xs="12" md="2" Class="d-flex align-center gap-2">
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@BatchIsRunning" OnClick="StartAnalyzeFromAnalyzeTab">Analyze</MudButton>
-                <MudButton Variant="Variant.Outlined" Color="Color.Error" Disabled="@(AnalyzeSnapshot is null || string.IsNullOrWhiteSpace(AnalyzeRepositoryId))" OnClick="DeleteAnalyzeSnapshotAsync">Delete result</MudButton>
-            </MudItem>
-        </MudGrid>
-
-        @if (BatchIsRunning || BatchCancelRequested || BatchCompletedCount > 0 || BatchFailedCount > 0)
-        {
-            <MudPaper Class="pa-3 mt-3">
-                <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
-                    <MudText Typo="Typo.subtitle2">Batch Analysis</MudText>
-                    @if (BatchIsRunning)
-                    {
-                        <MudButton Variant="Variant.Outlined" Color="Color.Warning" Disabled="@BatchCancelRequested" OnClick="RequestBatchCancelAsync">Cancel after current repo</MudButton>
-                    }
-                </MudStack>
-
-                <MudText Typo="Typo.caption" Class="mt-1">@BatchSummaryText</MudText>
-                @if (!string.IsNullOrWhiteSpace(BatchCurrentRepoName))
-                {
-                    <MudText Typo="Typo.caption">Current repo: @BatchCurrentRepoName</MudText>
-                }
-
-                <MudProgressLinear Class="mt-2" Color="Color.Primary" Value="@BatchTotalProgressPercent" />
-                @if (CurrentAnalyzeRun is not null && CurrentAnalyzeRun.Status is "Running" or "Queued")
-                {
-                    @if (CurrentAnalyzeRun.ProgressPercent.HasValue)
-                    {
-                        <MudProgressLinear Class="mt-2" Color="Color.Info" Value="@CurrentAnalyzeRun.ProgressPercent.Value" />
-                    }
-                    else
-                    {
-                        <MudProgressLinear Class="mt-2" Color="Color.Info" Indeterminate="true" />
-                    }
-                }
-
-                @if (BatchCancelRequested)
-                {
-                    <MudText Typo="Typo.caption" Color="Color.Warning" Class="mt-1">Cancellation requested. Batch will stop after current repository finishes.</MudText>
-                }
-            </MudPaper>
-        }
-
-        @if (CurrentAnalyzeRun is not null)
-        {
-            <MudPaper Class="pa-3 mt-3">
-                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-                    <MudText Typo="Typo.subtitle2">Status:</MudText>
-                    <MudChip Color="@RunStatusColor(CurrentAnalyzeRun.Status)">@CurrentAnalyzeRun.Status</MudChip>
-                    <MudText Typo="Typo.caption">Updated: @CurrentAnalyzeRun.UpdatedAtUtc.ToString("u")</MudText>
-                </MudStack>
-
-                @if (CurrentAnalyzeRun.Status is "Running" or "Queued")
-                {
-                    @if (CurrentAnalyzeRun.ProgressPercent.HasValue)
-                    {
-                        <MudProgressLinear Class="mt-2" Color="Color.Info" Value="@CurrentAnalyzeRun.ProgressPercent.Value" />
-                    }
-                    else
-                    {
-                        <MudProgressLinear Class="mt-2" Color="Color.Info" Indeterminate="true" />
-                    }
-                }
-
-                <MudText Typo="Typo.caption" Class="mt-1">@AnalyzeStatusText</MudText>
-
-                @if (!string.IsNullOrWhiteSpace(CurrentAnalyzeRun.Error))
-                {
-                    <MudText Typo="Typo.caption" Color="Color.Error">@CurrentAnalyzeRun.Error</MudText>
-                }
-            </MudPaper>
-        }
-
-        @if (AnalyzeSnapshot is not null)
-        {
-            <MudExpansionPanels Class="mt-3">
-                <MudExpansionPanel Text="@AnalyzeRepoHeader(AnalyzeSnapshot)">
-                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
-                        <MudIcon Icon="@Icons.Material.Filled.Calculate" Size="Size.Small" />
-                        <MudText Typo="Typo.caption">@AnalyzeSnapshot.Components.Count</MudText>
-
-                        <MudIcon Icon="@Icons.Material.Filled.Event" Size="Size.Small" />
-                        <MudText Typo="Typo.caption">@AnalyzeSnapshot.Outdated.Count</MudText>
-
-                        <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Size="Size.Small" Style="color:#f1c40f" />
-                        <MudText Typo="Typo.caption">@SeverityCount(AnalyzeSnapshot, "Low")</MudText>
-
-                        <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Size="Size.Small" Style="color:#ff9800" />
-                        <MudText Typo="Typo.caption">@SeverityCount(AnalyzeSnapshot, "Medium")</MudText>
-
-                        <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Size="Size.Small" Style="color:#e74c3c" />
-                        <MudText Typo="Typo.caption">@SeverityCount(AnalyzeSnapshot, "High")</MudText>
-                    </MudStack>
-
-                    <MudText Typo="Typo.caption">Analyzed at: @AnalyzeSnapshot.AnalyzedAtUtc.ToString("u")</MudText>
-
-                    @foreach (var project in AnalyzeSnapshot.DetectedProjects)
-                    {
-                        var projectFindings = AnalyzeSnapshot.Vulnerabilities.Concat(AnalyzeSnapshot.Outdated).Where(f => f.ProjectId == project.Id).ToList();
-                        var projectComponents = AnalyzeSnapshot.Components.Where(c => c.ProjectId == project.Id).ToList();
-                        <MudExpansionPanels Class="mt-3">
-                            <MudExpansionPanel Text="@ProjectHeader(project, AnalyzeSnapshot)">
-                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-                                    <img src="@ProjectIconPath(project)" alt="@project.ProjectType icon" class="ecosystem-icon" />
-                                    <MudText Typo="Typo.caption">Type: @project.ProjectType | Framework: @project.Framework | Version: @project.Version | Language: @project.Language</MudText>
-                                </MudStack>
-                                <MudText Typo="Typo.caption">Path: @project.Path</MudText>
-
-                                <MudText Typo="Typo.subtitle2" Class="mt-2">Components</MudText>
-                                <MudTable Items="projectComponents" Dense="true" RowStyleFunc="@((Component item, int _) => ComponentRowStyle(item, projectFindings))">
-                                    <HeaderContent>
-                                        <MudTh>Status</MudTh>
-                                        <MudTh>Ecosystem</MudTh>
-                                        <MudTh>Name</MudTh>
-                                        <MudTh>Version</MudTh>
-                                        <MudTh>Path</MudTh>
-                                    </HeaderContent>
-                                    <RowTemplate>
-                                        <MudTd>@ComponentStatus(context, projectFindings)</MudTd>
-                                        <MudTd>
-                                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
-                                                <img src="@EcosystemIconPath(context.Ecosystem)" alt="@context.Ecosystem icon" class="ecosystem-icon" />
-                                                <span>@context.Ecosystem</span>
-                                            </MudStack>
-                                        </MudTd>
-                                        <MudTd>@context.Name</MudTd>
-                                        <MudTd>@context.Version</MudTd>
-                                        <MudTd>@context.Path</MudTd>
-                                    </RowTemplate>
-                                </MudTable>
-
-                                <MudText Typo="Typo.subtitle2" Class="mt-2">Findings</MudText>
-                                <MudTable Items="projectFindings" Dense="true">
-                                    <HeaderContent>
-                                        <MudTh>Type</MudTh>
-                                        <MudTh>Package</MudTh>
-                                        <MudTh>Installed</MudTh>
-                                        <MudTh>Fixed</MudTh>
-                                        <MudTh>Severity</MudTh>
-                                        <MudTh>Guidance</MudTh>
-                                        <MudTh>Tool</MudTh>
-                                    </HeaderContent>
-                                    <RowTemplate>
-                                        <MudTd>@context.Type</MudTd>
-                                        <MudTd>@context.PackageName</MudTd>
-                                        <MudTd>@context.InstalledVersion</MudTd>
-                                        <MudTd>@context.FixedVersion</MudTd>
-                                        <MudTd>@context.Severity</MudTd>
-                                        <MudTd>@context.Advisory</MudTd>
-                                        <MudTd>@context.SourceTool</MudTd>
-                                    </RowTemplate>
-                                </MudTable>
-                            </MudExpansionPanel>
-                        </MudExpansionPanels>
-                    }
-                </MudExpansionPanel>
-            </MudExpansionPanels>
-        }
-    </MudTabPanel>
-
-    <MudTabPanel Text="Repos">
-        <MudText Typo="Typo.h6">Connection -> Workspace -> Repository</MudText>
-        <MudGrid Class="mt-2 mb-2">
-            <MudItem xs="12" md="4">
-                <MudSelect T="string" Value="RepoFetchConnectionId" ValueChanged="OnRepoFetchConnectionChanged" Label="Connection" Variant="Variant.Outlined">
-                    @foreach (var connection in Connections)
-                    {
-                        <MudSelectItem Value="@connection.Id">@connection.Name</MudSelectItem>
-                    }
-                </MudSelect>
-            </MudItem>
-            @if (IsRepoFetchAdsConnection)
-            {
-                <MudItem xs="12" md="6">
-                    <MudSelect T="string"
-                               MultiSelection="true"
-                               SelectedValues="RepoFetchSelectedWorkspaces"
-                               SelectedValuesChanged="OnRepoFetchWorkspacesChanged"
-                               Label="ADS Workspaces (Projects)"
-                               Variant="Variant.Outlined">
-                        @foreach (var workspaceName in RepoFetchWorkspaceOptions.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
-                        {
-                            <MudSelectItem Value="@workspaceName">@workspaceName</MudSelectItem>
-                        }
-                    </MudSelect>
-                </MudItem>
-            }
-            <MudItem xs="12" md="2" Class="d-flex align-center">
-                <MudButton Variant="Variant.Filled" Color="Color.Secondary" OnClick="FetchRepositoriesAsync">Fetch repositories</MudButton>
-            </MudItem>
-        </MudGrid>
-
-        @foreach (var connection in Connections.OrderBy(c => c.Name))
-        {
-            <MudExpansionPanels Class="mt-3">
-                <MudExpansionPanel Text="@ConnectionHeader(connection)">
-                    <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.FlexEnd" Class="mb-2">
-                        <MudButton Variant="Variant.Filled"
-                                   Color="Color.Primary"
-                                   Disabled="@BatchIsRunning"
-                                   OnClick="() => StartAnalyzeAllForConnectionAsync(connection.Id)">
-                            Analyze all
-                        </MudButton>
-                    </MudStack>
-                    @foreach (var workspace in Workspaces.Where(w => w.ConnectionId == connection.Id))
-                    {
-                        <MudPaper Class="pa-3 mt-2">
-                            <MudText Typo="Typo.subtitle1">@workspace.Name</MudText>
-
-                            @foreach (var repo in SortedReposForWorkspace(connection.Id, workspace.Id))
-                            {
-                                var latest = GetLatestSnapshot(repo.Id);
-                                <MudPaper Class="pa-3 mt-2">
-                                    <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
-                                        <div>
-                                            <MudText Typo="Typo.body1">@repo.Name</MudText>
-                                            <MudText Typo="Typo.caption">@repo.Url</MudText>
-                                            @if (latest is null)
-                                            {
-                                                <MudChip Color="Color.Warning" Size="Size.Small" Variant="Variant.Filled" Class="mt-1">Not Analyzed</MudChip>
-                                            }
-                                            else
-                                            {
-                                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-1">
-                                                    <MudIcon Icon="@Icons.Material.Filled.Calculate" Size="Size.Small" />
-                                                    <MudText Typo="Typo.caption">@latest.Components.Count</MudText>
-
-                                                    <MudIcon Icon="@Icons.Material.Filled.Event" Size="Size.Small" />
-                                                    <MudText Typo="Typo.caption">@latest.Outdated.Count</MudText>
-
-                                                    <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Size="Size.Small" Style="color:#f1c40f" />
-                                                    <MudText Typo="Typo.caption">@SeverityCount(latest, "Low")</MudText>
-
-                                                    <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Size="Size.Small" Style="color:#ff9800" />
-                                                    <MudText Typo="Typo.caption">@SeverityCount(latest, "Medium")</MudText>
-
-                                                    <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Size="Size.Small" Style="color:#e74c3c" />
-                                                    <MudText Typo="Typo.caption">@SeverityCount(latest, "High")</MudText>
-                                                </MudStack>
-                                            }
-                                        </div>
-                                        <MudStack Row="true" Spacing="1">
-                                            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" Disabled="@BatchIsRunning" OnClick="() => StartAnalyzeFromReposAsync(connection.Id, repo.Id)">@(latest is null ? "Analyze" : "Re-Analyze")</MudButton>
-                                            <MudButton Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small" Disabled="@(latest is null)" OnClick="() => ViewComponentsForRepoAsync(repo.Id)">View components</MudButton>
-                                            <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small" OnClick="() => DeleteRepositoryAsync(repo.Id)">Delete</MudButton>
-                                        </MudStack>
-                                    </MudStack>
-
-                                    @if (latest is not null)
-                                    {
-                                        <MudText Typo="Typo.caption" Class="mt-2">Last analyzed: @latest.AnalyzedAtUtc.ToString("u")</MudText>
-                                    }
-                                </MudPaper>
-                            }
-                        </MudPaper>
-                    }
-                </MudExpansionPanel>
-            </MudExpansionPanels>
-        }
     </MudTabPanel>
 
     <MudTabPanel Text="Components">
@@ -487,7 +207,7 @@
             </MudItem>
         </MudGrid>
 
-        <MudTable Items="ComponentRows" Dense="true" Hover="true" Class="mt-3" RowClick="OnComponentRowClick" RowStyleFunc="@((ComponentRow item, int _) => ComponentListRowStyle(item))" @bind-RowsPerPage="ComponentsRowsPerPage">
+        <MudTable T="ComponentRow" Items="ComponentRows" Dense="true" Hover="true" Class="mt-3" OnRowClick="OnComponentRowClick" RowStyleFunc="@((ComponentRow item, int _) => ComponentListRowStyle(item))" @bind-RowsPerPage="ComponentsRowsPerPage">
             <HeaderContent>
                 <MudTh></MudTh>
                 <MudTh>Ecosystem</MudTh>
@@ -648,7 +368,7 @@
             </MudItem>
         </MudGrid>
 
-        <MudTable Items="GlobalFindings" Dense="true" Hover="true" Class="mt-3" RowClick="OnFindingRowClick" RowStyleFunc="@((GlobalFinding item, int _) => FindingRowStyle(item))" @bind-RowsPerPage="FindingsRowsPerPage">
+        <MudTable T="GlobalFinding" Items="GlobalFindings" Dense="true" Hover="true" Class="mt-3" OnRowClick="OnFindingRowClick" RowStyleFunc="@((GlobalFinding item, int _) => FindingRowStyle(item))" @bind-RowsPerPage="FindingsRowsPerPage">
             <HeaderContent>
                 <MudTh></MudTh>
                 <MudTh>Type</MudTh>
@@ -786,6 +506,296 @@
         }
     </MudTabPanel>
 
+    <MudTabPanel Text="Analyze">
+        <MudText Typo="Typo.h6">Run Analysis</MudText>
+        <MudGrid Class="mt-2">
+            <MudItem xs="12" md="4">
+                <MudSelect T="string" Value="AnalyzeConnectionId" ValueChanged="OnAnalyzeConnectionChanged" Label="Connection" Variant="Variant.Outlined">
+                    @foreach (var connection in Connections)
+                    {
+                        <MudSelectItem Value="@connection.Id">@connection.Name</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" md="6">
+                <MudSelect T="string" Value="AnalyzeRepositoryId" ValueChanged="OnAnalyzeRepositoryChanged" Label="Repository" Variant="Variant.Outlined">
+                    @foreach (var repo in AnalyzeRepositories)
+                    {
+                        <MudSelectItem Value="@repo.Id">@RepoSelectorLabel(repo)</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" md="2" Class="d-flex align-center gap-2">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@BatchIsRunning" OnClick="StartAnalyzeFromAnalyzeTab">Analyze</MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Error" Disabled="@(AnalyzeSnapshot is null || string.IsNullOrWhiteSpace(AnalyzeRepositoryId))" OnClick="DeleteAnalyzeSnapshotAsync">Delete result</MudButton>
+            </MudItem>
+        </MudGrid>
+
+        @if (BatchIsRunning || BatchCancelRequested || BatchCompletedCount > 0 || BatchFailedCount > 0)
+        {
+            <MudPaper Class="pa-3 mt-3">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                    <MudText Typo="Typo.subtitle2">Batch Analysis</MudText>
+                    @if (BatchIsRunning)
+                    {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Warning" Disabled="@BatchCancelRequested" OnClick="RequestBatchCancelAsync">Cancel after current repo</MudButton>
+                    }
+                </MudStack>
+
+                <MudText Typo="Typo.caption" Class="mt-1">@BatchSummaryText</MudText>
+                @if (!string.IsNullOrWhiteSpace(BatchCurrentRepoName))
+                {
+                    <MudText Typo="Typo.caption">Current repo: @BatchCurrentRepoName</MudText>
+                }
+
+                <MudProgressLinear Class="mt-2" Color="Color.Primary" Value="@BatchTotalProgressPercent" />
+                @if (CurrentAnalyzeRun is not null && CurrentAnalyzeRun.Status is "Running" or "Queued")
+                {
+                    @if (CurrentAnalyzeRun.ProgressPercent.HasValue)
+                    {
+                        <MudProgressLinear Class="mt-2" Color="Color.Info" Value="@CurrentAnalyzeRun.ProgressPercent.Value" />
+                    }
+                    else
+                    {
+                        <MudProgressLinear Class="mt-2" Color="Color.Info" Indeterminate="true" />
+                    }
+                }
+
+                @if (BatchCancelRequested)
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Warning" Class="mt-1">Cancellation requested. Batch will stop after current repository finishes.</MudText>
+                }
+            </MudPaper>
+        }
+
+        @if (CurrentAnalyzeRun is not null)
+        {
+            <MudPaper Class="pa-3 mt-3">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                    <MudText Typo="Typo.subtitle2">Status:</MudText>
+                    <MudChip T="string" Color="@RunStatusColor(CurrentAnalyzeRun.Status)">@CurrentAnalyzeRun.Status</MudChip>
+                    <MudText Typo="Typo.caption">Updated: @CurrentAnalyzeRun.UpdatedAtUtc.ToString("u")</MudText>
+                </MudStack>
+
+                @if (CurrentAnalyzeRun.Status is "Running" or "Queued")
+                {
+                    @if (CurrentAnalyzeRun.ProgressPercent.HasValue)
+                    {
+                        <MudProgressLinear Class="mt-2" Color="Color.Info" Value="@CurrentAnalyzeRun.ProgressPercent.Value" />
+                    }
+                    else
+                    {
+                        <MudProgressLinear Class="mt-2" Color="Color.Info" Indeterminate="true" />
+                    }
+                }
+
+                <MudText Typo="Typo.caption" Class="mt-1">@AnalyzeStatusText</MudText>
+
+                @if (!string.IsNullOrWhiteSpace(CurrentAnalyzeRun.Error))
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Error">@CurrentAnalyzeRun.Error</MudText>
+                }
+            </MudPaper>
+        }
+
+        @if (AnalyzeSnapshot is not null)
+        {
+            <MudExpansionPanels Class="mt-3">
+                <MudExpansionPanel Text="@AnalyzeRepoHeader(AnalyzeSnapshot)">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+                        <MudIcon Icon="@Icons.Material.Filled.Calculate" Size="Size.Small" />
+                        <MudText Typo="Typo.caption">@AnalyzeSnapshot.Components.Count</MudText>
+
+                        <MudIcon Icon="@Icons.Material.Filled.Event" Size="Size.Small" />
+                        <MudText Typo="Typo.caption">@AnalyzeSnapshot.Outdated.Count</MudText>
+
+                        <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Size="Size.Small" Style="color:#f1c40f" />
+                        <MudText Typo="Typo.caption">@SeverityCount(AnalyzeSnapshot, "Low")</MudText>
+
+                        <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Size="Size.Small" Style="color:#ff9800" />
+                        <MudText Typo="Typo.caption">@SeverityCount(AnalyzeSnapshot, "Medium")</MudText>
+
+                        <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Size="Size.Small" Style="color:#e74c3c" />
+                        <MudText Typo="Typo.caption">@SeverityCount(AnalyzeSnapshot, "High")</MudText>
+                    </MudStack>
+
+                    <MudText Typo="Typo.caption">Analyzed at: @AnalyzeSnapshot.AnalyzedAtUtc.ToString("u")</MudText>
+
+                    @foreach (var project in AnalyzeSnapshot.DetectedProjects)
+                    {
+                        var projectFindings = AnalyzeSnapshot.Vulnerabilities.Concat(AnalyzeSnapshot.Outdated).Where(f => f.ProjectId == project.Id).ToList();
+                        var projectComponents = AnalyzeSnapshot.Components.Where(c => c.ProjectId == project.Id).ToList();
+                        <MudExpansionPanels Class="mt-3">
+                            <MudExpansionPanel Text="@ProjectHeader(project, AnalyzeSnapshot)">
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                                    <img src="@ProjectIconPath(project)" alt="@project.ProjectType icon" class="ecosystem-icon" />
+                                    <MudText Typo="Typo.caption">Type: @project.ProjectType | Framework: @project.Framework | Version: @project.Version | Language: @project.Language</MudText>
+                                </MudStack>
+                                <MudText Typo="Typo.caption">Path: @project.Path</MudText>
+
+                                <MudText Typo="Typo.subtitle2" Class="mt-2">Components</MudText>
+                                <MudTable Items="projectComponents" Dense="true" RowStyleFunc="@((Component item, int _) => ComponentRowStyle(item, projectFindings))">
+                                    <HeaderContent>
+                                        <MudTh>Status</MudTh>
+                                        <MudTh>Ecosystem</MudTh>
+                                        <MudTh>Name</MudTh>
+                                        <MudTh>Version</MudTh>
+                                        <MudTh>Path</MudTh>
+                                    </HeaderContent>
+                                    <RowTemplate>
+                                        <MudTd>@ComponentStatus(context, projectFindings)</MudTd>
+                                        <MudTd>
+                                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                                <img src="@EcosystemIconPath(context.Ecosystem)" alt="@context.Ecosystem icon" class="ecosystem-icon" />
+                                                <span>@context.Ecosystem</span>
+                                            </MudStack>
+                                        </MudTd>
+                                        <MudTd>@context.Name</MudTd>
+                                        <MudTd>@context.Version</MudTd>
+                                        <MudTd>@context.Path</MudTd>
+                                    </RowTemplate>
+                                </MudTable>
+
+                                <MudText Typo="Typo.subtitle2" Class="mt-2">Findings</MudText>
+                                <MudTable Items="projectFindings" Dense="true">
+                                    <HeaderContent>
+                                        <MudTh>Type</MudTh>
+                                        <MudTh>Package</MudTh>
+                                        <MudTh>Installed</MudTh>
+                                        <MudTh>Fixed</MudTh>
+                                        <MudTh>Severity</MudTh>
+                                        <MudTh>Guidance</MudTh>
+                                        <MudTh>Tool</MudTh>
+                                    </HeaderContent>
+                                    <RowTemplate>
+                                        <MudTd>@context.Type</MudTd>
+                                        <MudTd>@context.PackageName</MudTd>
+                                        <MudTd>@context.InstalledVersion</MudTd>
+                                        <MudTd>@context.FixedVersion</MudTd>
+                                        <MudTd>@context.Severity</MudTd>
+                                        <MudTd>@context.Advisory</MudTd>
+                                        <MudTd>@context.SourceTool</MudTd>
+                                    </RowTemplate>
+                                </MudTable>
+                            </MudExpansionPanel>
+                        </MudExpansionPanels>
+                    }
+                </MudExpansionPanel>
+            </MudExpansionPanels>
+        }
+    </MudTabPanel>
+
+    <MudTabPanel Text="Repos">
+        <MudText Typo="Typo.h6">Connection -> Workspace -> Repository</MudText>
+        <MudGrid Class="mt-2 mb-2">
+            <MudItem xs="12" md="4">
+                <MudSelect T="string" Value="RepoFetchConnectionId" ValueChanged="OnRepoFetchConnectionChanged" Label="Connection" Variant="Variant.Outlined">
+                    @foreach (var connection in Connections)
+                    {
+                        <MudSelectItem Value="@connection.Id">@connection.Name</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            @if (IsRepoFetchAdsConnection)
+            {
+                <MudItem xs="12" md="6">
+                    <MudSelect T="string"
+                               MultiSelection="true"
+                               SelectedValues="RepoFetchSelectedWorkspaces"
+                               SelectedValuesChanged="OnRepoFetchWorkspacesChanged"
+                               Label="ADS Workspaces (Projects)"
+                               Variant="Variant.Outlined">
+                        @foreach (var workspaceName in RepoFetchWorkspaceOptions.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+                        {
+                            <MudSelectItem Value="@workspaceName">@workspaceName</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+            }
+            <MudItem xs="12" md="2" Class="d-flex align-center">
+                <MudButton Variant="Variant.Filled" Color="Color.Secondary" OnClick="FetchRepositoriesAsync">Fetch repositories</MudButton>
+            </MudItem>
+        </MudGrid>
+
+        @foreach (var connection in Connections.OrderBy(c => c.Name))
+        {
+            var hasUnanalyzed = HasUnanalyzedRepositoriesInConnection(connection.Id);
+            <MudExpansionPanels Class="mt-3">
+                <MudExpansionPanel Text="@ConnectionHeader(connection)">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.FlexEnd" Class="mb-2">
+                        @if (hasUnanalyzed)
+                        {
+                            <MudButton Variant="Variant.Outlined"
+                                       Color="Color.Primary"
+                                       Disabled="@BatchIsRunning"
+                                       OnClick="() => StartAnalyzeNextForConnectionAsync(connection.Id)">
+                                Analyze next
+                            </MudButton>
+                        }
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   Disabled="@BatchIsRunning"
+                                   OnClick="() => StartAnalyzeAllForConnectionAsync(connection.Id)">
+                            Analyze all
+                        </MudButton>
+                    </MudStack>
+                    @foreach (var workspace in Workspaces.Where(w => w.ConnectionId == connection.Id))
+                    {
+                        <MudPaper Class="pa-3 mt-2">
+                            <MudText Typo="Typo.subtitle1">@workspace.Name</MudText>
+
+                            @foreach (var repo in SortedReposForWorkspace(connection.Id, workspace.Id))
+                            {
+                                var latest = GetLatestSnapshot(repo.Id);
+                                <MudPaper Class="pa-3 mt-2">
+                                    <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
+                                        <div>
+                                            <MudText Typo="Typo.body1">@repo.Name</MudText>
+                                            <MudText Typo="Typo.caption">@repo.Url</MudText>
+                                            @if (latest is null)
+                                            {
+                                                <MudChip T="string" Color="Color.Warning" Size="Size.Small" Variant="Variant.Filled" Class="mt-1">Not Analyzed</MudChip>
+                                            }
+                                            else
+                                            {
+                                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-1">
+                                                    <MudIcon Icon="@Icons.Material.Filled.Calculate" Size="Size.Small" />
+                                                    <MudText Typo="Typo.caption">@latest.Components.Count</MudText>
+
+                                                    <MudIcon Icon="@Icons.Material.Filled.Event" Size="Size.Small" />
+                                                    <MudText Typo="Typo.caption">@latest.Outdated.Count</MudText>
+
+                                                    <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Size="Size.Small" Style="color:#f1c40f" />
+                                                    <MudText Typo="Typo.caption">@SeverityCount(latest, "Low")</MudText>
+
+                                                    <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Size="Size.Small" Style="color:#ff9800" />
+                                                    <MudText Typo="Typo.caption">@SeverityCount(latest, "Medium")</MudText>
+
+                                                    <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Size="Size.Small" Style="color:#e74c3c" />
+                                                    <MudText Typo="Typo.caption">@SeverityCount(latest, "High")</MudText>
+                                                </MudStack>
+                                            }
+                                        </div>
+                                        <MudStack Row="true" Spacing="1">
+                                            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" Disabled="@BatchIsRunning" OnClick="() => StartAnalyzeFromReposAsync(connection.Id, repo.Id)">@(latest is null ? "Analyze" : "Re-Analyze")</MudButton>
+                                            <MudButton Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small" Disabled="@(latest is null)" OnClick="() => ViewComponentsForRepoAsync(repo.Id)">View components</MudButton>
+                                            <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small" OnClick="() => DeleteRepositoryAsync(repo.Id)">Delete</MudButton>
+                                        </MudStack>
+                                    </MudStack>
+
+                                    @if (latest is not null)
+                                    {
+                                        <MudText Typo="Typo.caption" Class="mt-2">Last analyzed: @latest.AnalyzedAtUtc.ToString("u")</MudText>
+                                    }
+                                </MudPaper>
+                            }
+                        </MudPaper>
+                    }
+                </MudExpansionPanel>
+            </MudExpansionPanels>
+        }
+    </MudTabPanel>
+
     <MudTabPanel Text="Connections">
         <MudText Typo="Typo.h6">Connections</MudText>
 
@@ -833,7 +843,7 @@
                     @if (context.TokenExpiresAt.HasValue)
                     {
                         var near = context.TokenExpiresAt.Value <= DateTimeOffset.UtcNow.AddDays(14);
-                        <MudChip Color="@(near ? Color.Warning : Color.Success)" Size="Size.Small">@context.TokenExpiresAt.Value.ToString("u")</MudChip>
+                        <MudChip T="string" Color="@(near ? Color.Warning : Color.Success)" Size="Size.Small">@context.TokenExpiresAt.Value.ToString("u")</MudChip>
                     }
                 </MudTd>
                 <MudTd>
@@ -842,7 +852,7 @@
                     <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info" OnClick="() => TestConnectionAsync(context.Id)">Test connection</MudButton>
                     @if (ConnectionTestResults.TryGetValue(context.Id, out var testResult))
                     {
-                        <MudChip Size="Size.Small" Color="@(testResult.Success ? Color.Success : Color.Error)">@testResult.Message</MudChip>
+                        <MudChip T="string" Size="Size.Small" Color="@(testResult.Success ? Color.Success : Color.Error)">@testResult.Message</MudChip>
                     }
                 </MudTd>
             </RowTemplate>
@@ -852,7 +862,7 @@
     <MudTabPanel Text="Tools">
         <MudPaper Class="pa-4 mb-4">
             <MudText Typo="Typo.h6">About</MudText>
-            <MudText Typo="Typo.body2" Class="mb-2">Repo Analyzer version: <strong>@AppVersion</strong></MudText>
+            <MudText Typo="Typo.body2" Class="mb-2">@AppName version: <strong>@AppVersion</strong></MudText>
             <MudTable Items="SupportedDistributions" Dense="true" Hover="true">
                 <HeaderContent>
                     <MudTh></MudTh>
@@ -921,7 +931,7 @@
                 </MudSelect>
             </MudItem>
             <MudItem xs="12" md="2">
-                <MudSwitch @bind-Checked="LogSortDescending" Color="Color.Primary" Label="Desc" />
+                <MudSwitch T="bool" @bind-Value="LogSortDescending" Color="Color.Primary" Label="Desc" />
             </MudItem>
             <MudItem xs="12" md="12" Class="d-flex align-center">
                 <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="ReloadLogsAsync">Refresh</MudButton>
@@ -959,6 +969,7 @@
 </MudTabs>
 
 @code {
+    private string AppName => Configuration["App:Name"] ?? "Repo Analyzer";
     private string AppVersion => Configuration["App:Version"] ?? "1.0.0";
 
     private static readonly List<DistributionInfo> SupportedDistributions =
@@ -1116,6 +1127,8 @@
 
         try
         {
+            await Js.InvokeVoidAsync("repoAnalyzer.logInfo", "RepoAnalyzer: internal self-connect routine is disabled; using direct in-process calls.");
+
             var componentsPref = await Js.InvokeAsync<string?>("localStorage.getItem", "repoanalyzer.components.rowsperpage");
             if (int.TryParse(componentsPref, out var componentsRows) && (componentsRows is 100 or 200 or 500))
             {
@@ -1302,14 +1315,14 @@
     {
         AnalyzeConnectionId = connectionId;
         AnalyzeRepositoryId = repositoryId;
-        ActiveTabIndex = 1;
+        ActiveTabIndex = 3;
         await StartAnalyze(repositoryId);
     }
 
     private async Task ViewComponentsForRepoAsync(string repositoryId)
     {
         ComponentRepositoryId = repositoryId;
-        ActiveTabIndex = 3;
+        ActiveTabIndex = 1;
         await ReloadComponentsAsync();
     }
 
@@ -1373,7 +1386,7 @@
 
         AnalyzeConnectionId = connectionId;
         AnalyzeRepositoryId = repos[0].Id;
-        ActiveTabIndex = 1;
+        ActiveTabIndex = 3;
         StateHasChanged();
 
         await RunBatchAnalysisAsync(repos);
@@ -1392,7 +1405,7 @@
 
         AnalyzeConnectionId = next.ConnectionId;
         AnalyzeRepositoryId = next.Id;
-        ActiveTabIndex = 1;
+        ActiveTabIndex = 3;
         await StartAnalyze(next.Id);
     }
 
@@ -1409,7 +1422,7 @@
 
         AnalyzeConnectionId = repos[0].ConnectionId;
         AnalyzeRepositoryId = repos[0].Id;
-        ActiveTabIndex = 1;
+        ActiveTabIndex = 3;
         StateHasChanged();
 
         await RunBatchAnalysisAsync(repos);
@@ -1494,8 +1507,31 @@
     private Task OpenFindingsForRepositoryAsync(string repositoryId)
     {
         FindingsRepoId = repositoryId;
-        ActiveTabIndex = 4;
+        ActiveTabIndex = 2;
         return ReloadFindingsAsync();
+    }
+
+    private async Task StartAnalyzeNextForConnectionAsync(string connectionId)
+    {
+        if (BatchIsRunning)
+        {
+            return;
+        }
+
+        var next = Workspaces
+            .Where(w => w.ConnectionId == connectionId)
+            .SelectMany(w => SortedReposForWorkspace(connectionId, w.Id))
+            .FirstOrDefault(r => GetLatestSnapshot(r.Id) is null);
+
+        if (next is null)
+        {
+            return;
+        }
+
+        AnalyzeConnectionId = connectionId;
+        AnalyzeRepositoryId = next.Id;
+        ActiveTabIndex = 3;
+        await StartAnalyze(next.Id);
     }
 
     private async Task<string> MonitorRunToCompletionAsync(string runId)
@@ -1909,7 +1945,7 @@
             FullWidth = true
         };
 
-        var dialog = DialogService.Show<ConfirmDialog>(title, parameters, options);
+        var dialog = await DialogService.ShowAsync<ConfirmDialog>(title, parameters, options);
         var result = await dialog.Result;
         return !result.Canceled && result.Data is bool confirmed && confirmed;
     }
@@ -2088,9 +2124,15 @@
     private IEnumerable<RepositoryEntity> SortedReposForWorkspace(string connectionId, string workspaceId)
         => Repositories
             .Where(r => r.ConnectionId == connectionId && r.WorkspaceId == workspaceId)
-            .OrderByDescending(r => LatestSnapshotsByRepo.TryGetValue(r.Id, out var s) ? s.AnalyzedAtUtc : DateTimeOffset.MinValue)
+            .OrderBy(r => LatestSnapshotsByRepo.ContainsKey(r.Id) ? 1 : 0)
+            .ThenBy(r => LatestSnapshotsByRepo.TryGetValue(r.Id, out var s) ? s.AnalyzedAtUtc : DateTimeOffset.MinValue)
             .ThenBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+    private bool HasUnanalyzedRepositoriesInConnection(string connectionId)
+        => Repositories
+            .Where(r => r.ConnectionId == connectionId)
+            .Any(r => !LatestSnapshotsByRepo.ContainsKey(r.Id));
 
     private RepoAnalysisSnapshot? GetLatestSnapshot(string repositoryId)
         => LatestSnapshotsByRepo.TryGetValue(repositoryId, out var snapshot) ? snapshot : null;

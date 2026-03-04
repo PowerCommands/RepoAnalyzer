@@ -8,8 +8,8 @@
 <MudLayout>
     <MudAppBar Elevation="0" Color="Color.Primary">
         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
-            <img src="favicon.png" alt="Repo Analyzer" class="app-logo" />
-            <MudText Typo="Typo.h6">Repo Analyzer</MudText>
+            <img src="favicon.png" alt="@AppName" class="app-logo" />
+            <MudText Typo="Typo.h6">@AppName</MudText>
             <MudText Typo="Typo.caption" Class="app-version">v@(Configuration["App:Version"] ?? "1.0.0")</MudText>
         </MudStack>
     </MudAppBar>
@@ -18,3 +18,7 @@
         @Body
     </MudMainContent>
 </MudLayout>
+
+@code {
+    private string AppName => Configuration["App:Name"] ?? "Repo Analyzer";
+}

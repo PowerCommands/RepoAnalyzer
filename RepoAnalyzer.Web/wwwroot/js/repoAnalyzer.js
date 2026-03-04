@@ -19,3 +19,7 @@ window.repoAnalyzer.downloadFileFromBase64 = function (fileName, contentType, ba
     document.body.removeChild(anchor);
     URL.revokeObjectURL(url);
 };
+
+window.repoAnalyzer.logInfo = function (message) {
+    console.log(message);
+};

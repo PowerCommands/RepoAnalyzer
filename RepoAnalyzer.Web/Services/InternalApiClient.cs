@@ -1,203 +1,160 @@
-using System.Net.Http.Json;
-using System.Net.Http.Headers;
 using RepoAnalyzer.Web.Dto;
 using RepoAnalyzer.Web.Models;
+using RepoAnalyzer.Web.Services.Analysis;
+using RepoAnalyzer.Web.Services.Analysis.Logging;
 
 namespace RepoAnalyzer.Web.Services;
 
 public sealed class InternalApiClient
 {
-    private readonly IHttpClientFactory _factory;
-    private readonly IHttpContextAccessor _httpContextAccessor;
+    private readonly ConnectionService _connectionService;
+    private readonly ConnectionValidationService _connectionValidationService;
+    private readonly RepositorySyncService _repositorySyncService;
+    private readonly QueryService _queryService;
+    private readonly RepositoryAnalyzerService _repositoryAnalyzerService;
+    private readonly AnalyzeRunService _analyzeRunService;
+    private readonly IAnalysisLog _analysisLog;
+    private readonly BackupService _backupService;
     private readonly IConfiguration _configuration;
 
-    public InternalApiClient(IHttpClientFactory factory, IHttpContextAccessor httpContextAccessor, IConfiguration configuration)
+    public InternalApiClient(
+        ConnectionService connectionService,
+        ConnectionValidationService connectionValidationService,
+        RepositorySyncService repositorySyncService,
+        QueryService queryService,
+        RepositoryAnalyzerService repositoryAnalyzerService,
+        AnalyzeRunService analyzeRunService,
+        IAnalysisLog analysisLog,
+        BackupService backupService,
+        IConfiguration configuration)
     {
-        _factory = factory;
-        _httpContextAccessor = httpContextAccessor;
+        _connectionService = connectionService;
+        _connectionValidationService = connectionValidationService;
+        _repositorySyncService = repositorySyncService;
+        _queryService = queryService;
+        _repositoryAnalyzerService = repositoryAnalyzerService;
+        _analyzeRunService = analyzeRunService;
+        _analysisLog = analysisLog;
+        _backupService = backupService;
         _configuration = configuration;
     }
 
     public async Task<List<ConnectionView>> GetConnectionsAsync(CancellationToken ct = default)
-        => await GetAsync<List<ConnectionView>>("/internal-api/connections", ct) ?? new List<ConnectionView>();
+        => await _connectionService.GetAllAsync(ct);
 
     public async Task<ConnectionView?> SaveConnectionAsync(ConnectionUpsertRequest request, CancellationToken ct = default)
-        => await PostAsync<ConnectionUpsertRequest, ConnectionView>("/internal-api/connections", request, ct);
+        => await _connectionService.UpsertAsync(request, ct);
 
     public async Task<ConnectionTestResult?> TestConnectionAsync(string id, CancellationToken ct = default)
-        => await PostAsync<object, ConnectionTestResult>($"/internal-api/connections/{id}/test", new { }, ct);
+        => await _connectionValidationService.TestConnectionAsync(id, ct);
 
     public async Task DeleteConnectionAsync(string id, CancellationToken ct = default)
-        => await DeleteAsync($"/internal-api/connections/{id}", ct);
+        => await _connectionService.DeleteAsync(id, ct);
 
     public async Task SyncConnectionAsync(string id, CancellationToken ct = default)
-        => await PostAsync<object, object>($"/internal-api/connections/{id}/sync", new { }, ct);
+        => await _repositorySyncService.SyncConnectionAsync(id, ct);
 
     public async Task<List<string>> GetProviderWorkspaceNamesPreviewAsync(string id, CancellationToken ct = default)
-        => await GetAsync<List<string>>($"/internal-api/connections/{id}/workspaces/preview", ct) ?? new List<string>();
+        => await _repositorySyncService.GetProviderWorkspaceNamesPreviewAsync(id, ct);
 
     public async Task<FetchRepositoriesResult?> FetchRepositoriesAsync(string id, IEnumerable<string>? workspaceNames = null, CancellationToken ct = default)
     {
-        var request = new FetchRepositoriesRequest
-        {
-            WorkspaceNames = workspaceNames?.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToList()
-        };
+        var requestedWorkspaceNames = workspaceNames?
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
-        return await PostAsync<FetchRepositoriesRequest, FetchRepositoriesResult>($"/internal-api/connections/{id}/fetch-repositories", request, ct);
+        var result = await _repositorySyncService.FetchNewRepositoriesAsync(id, requestedWorkspaceNames, ct);
+
+        return new FetchRepositoriesResult
+        {
+            AddedWorkspaces = result.AddedWorkspaces,
+            AddedRepositories = result.AddedRepositories
+        };
     }
 
     public async Task<List<Workspace>> GetWorkspacesAsync(CancellationToken ct = default)
-        => await GetAsync<List<Workspace>>("/internal-api/workspaces", ct) ?? new List<Workspace>();
+        => await _queryService.GetWorkspacesAsync(ct);
 
     public async Task<List<RepositoryEntity>> GetRepositoriesAsync(CancellationToken ct = default)
-        => await GetAsync<List<RepositoryEntity>>("/internal-api/repositories", ct) ?? new List<RepositoryEntity>();
+        => await _queryService.GetRepositoriesAsync(ct);
 
     public async Task DeleteRepositoryAsync(string id, CancellationToken ct = default)
-        => await DeleteAsync($"/internal-api/repositories/{id}", ct);
+        => await _connectionService.DeleteRepositoryAsync(id, ct);
 
     public async Task<RepoAnalysisSnapshot?> AnalyzeAsync(string repositoryId, CancellationToken ct = default)
-        => await PostAsync<AnalyzeRepositoryRequest, RepoAnalysisSnapshot>("/internal-api/analyze", new AnalyzeRepositoryRequest { RepositoryId = repositoryId }, ct);
+        => await _repositoryAnalyzerService.AnalyzeRepositoryAsync(repositoryId, analysisRunId: null, progress: null, ct);
 
-    public async Task<AnalyzeRun?> StartAnalysisAsync(string repositoryId, CancellationToken ct = default)
-        => await PostAsync<AnalyzeStartRequest, AnalyzeRun>("/internal-api/analysis/start", new AnalyzeStartRequest { RepositoryId = repositoryId }, ct);
+    public Task<AnalyzeRun?> StartAnalysisAsync(string repositoryId, CancellationToken ct = default)
+        => Task.FromResult<AnalyzeRun?>(_analyzeRunService.Start(repositoryId));
 
-    public async Task<AnalyzeRun?> GetAnalysisRunAsync(string runId, CancellationToken ct = default)
-        => await GetAsync<AnalyzeRun>($"/internal-api/analysis/runs/{runId}", ct);
+    public Task<AnalyzeRun?> GetAnalysisRunAsync(string runId, CancellationToken ct = default)
+        => Task.FromResult(_analyzeRunService.Get(runId));
 
-    public async Task<List<AnalyzeRun>> GetRecentAnalysisRunsAsync(int take = 20, CancellationToken ct = default)
-        => await GetAsync<List<AnalyzeRun>>($"/internal-api/analysis/runs/recent?take={take}", ct) ?? new List<AnalyzeRun>();
+    public Task<List<AnalyzeRun>> GetRecentAnalysisRunsAsync(int take = 20, CancellationToken ct = default)
+        => Task.FromResult(_analyzeRunService.GetRecent(take));
 
     public async Task<List<RepoAnalysisSnapshot>> GetSnapshotsAsync(CancellationToken ct = default)
-        => await GetAsync<List<RepoAnalysisSnapshot>>("/internal-api/snapshots", ct) ?? new List<RepoAnalysisSnapshot>();
+        => await _queryService.GetSnapshotsAsync(ct);
 
     public async Task<List<Component>> GetComponentsAsync(string? nameFilter, string? repositoryId, int? take = null, CancellationToken ct = default)
-    {
-        var queryParts = new List<string>
-        {
-            $"name={Uri.EscapeDataString(nameFilter ?? string.Empty)}",
-            $"repositoryId={Uri.EscapeDataString(repositoryId ?? string.Empty)}"
-        };
-
-        if (take.HasValue)
-        {
-            queryParts.Add($"take={take.Value}");
-        }
-
-        var query = string.Join("&", queryParts);
-        return await GetAsync<List<Component>>($"/internal-api/components?{query}", ct) ?? new List<Component>();
-    }
+        => await _queryService.GetLatestComponentsAsync(nameFilter, repositoryId, take, ct);
 
     public async Task DeleteAnalysisAsync(string repositoryId, CancellationToken ct = default)
-        => await DeleteAsync($"/internal-api/analysis/{repositoryId}", ct);
+        => await _repositoryAnalyzerService.ClearRepositoryAnalysisAsync(repositoryId, ct);
 
     public async Task<List<GlobalFinding>> GetFindingsAsync(string? ecosystem, string? severity, string? repositoryId, CancellationToken ct = default)
-    {
-        var query = $"ecosystem={Uri.EscapeDataString(ecosystem ?? string.Empty)}&severity={Uri.EscapeDataString(severity ?? string.Empty)}&repositoryId={Uri.EscapeDataString(repositoryId ?? string.Empty)}";
-        return await GetAsync<List<GlobalFinding>>($"/internal-api/findings?{query}", ct) ?? new List<GlobalFinding>();
-    }
+        => await _queryService.GetGlobalFindingsAsync(ecosystem, severity, repositoryId, ct);
 
     public async Task<AnalysisLogLatestResponse> GetLatestAnalysisLogsAsync(int lines = 2000, CancellationToken ct = default)
-        => await GetAsync<AnalysisLogLatestResponse>($"/internal-api/tools/logs/latest?lines={lines}", ct) ?? new AnalysisLogLatestResponse();
+    {
+        var requestedLines = Math.Clamp(lines, 1, 50000);
+        var logLines = await _analysisLog.ReadLatestLinesAsync(requestedLines, ct);
+
+        return new AnalysisLogLatestResponse
+        {
+            RequestedLines = requestedLines,
+            ReturnedLines = logLines.Count,
+            Lines = logLines
+        };
+    }
 
     public async Task ClearAnalysisLogsAsync(CancellationToken ct = default)
-        => await PostAsync<object, object>("/internal-api/tools/logs/clear", new { }, ct);
+        => await _analysisLog.ClearAsync(ct);
 
     public string GetAnalysisLogDownloadUrl() => "/internal-api/tools/logs/download";
 
     public async Task<BackupDownloadResult> DownloadBackupAsync(CancellationToken ct = default)
     {
-        var client = BuildClient();
-        using var response = await client.GetAsync("/internal-api/tools/backup/download", ct);
-        response.EnsureSuccessStatusCode();
-
-        var bytes = await response.Content.ReadAsByteArrayAsync(ct);
-        var fileName = GetFileName(response.Content.Headers.ContentDisposition) ?? $"repo-analyzer-backup-{DateTime.UtcNow:yyyyMMdd-HHmmss}.zip";
+        var result = await _backupService.CreateBackupZipAsync(ct);
+        using var backupStream = result.Stream;
 
         return new BackupDownloadResult
         {
-            FileName = fileName,
-            Bytes = bytes
+            FileName = result.FileName,
+            Bytes = result.Stream.ToArray()
         };
     }
 
     public async Task<BackupRestoreResult?> RestoreBackupAsync(string fileName, Stream stream, CancellationToken ct = default)
+        => await _backupService.RestoreZipAsync(stream, ct);
+
+    public Task<DataStorageStatsResponse> GetDataStorageStatsAsync(CancellationToken ct = default)
     {
-        var client = BuildClient();
-        using var content = new MultipartFormDataContent();
-        using var fileContent = new StreamContent(stream);
-        fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/zip");
-        content.Add(fileContent, "file", fileName);
+        var dataPath = _configuration["DataPath"] ?? "/app/data";
+        Directory.CreateDirectory(dataPath);
 
-        using var response = await client.PostAsync("/internal-api/tools/backup/restore", content, ct);
-        response.EnsureSuccessStatusCode();
+        var jsonFiles = Directory.GetFiles(dataPath, "*.json", SearchOption.TopDirectoryOnly);
+        var totalBytes = jsonFiles
+            .Select(path => new FileInfo(path))
+            .Sum(file => file.Exists ? file.Length : 0L);
 
-        return await response.Content.ReadFromJsonAsync<BackupRestoreResult>(cancellationToken: ct);
-    }
-
-    public async Task<DataStorageStatsResponse> GetDataStorageStatsAsync(CancellationToken ct = default)
-        => await GetAsync<DataStorageStatsResponse>("/internal-api/tools/storage/stats", ct) ?? new DataStorageStatsResponse();
-
-    private static string? GetFileName(ContentDispositionHeaderValue? header)
-    {
-        var value = header?.FileNameStar ?? header?.FileName;
-        if (string.IsNullOrWhiteSpace(value))
+        return Task.FromResult(new DataStorageStatsResponse
         {
-            return null;
-        }
-
-        return value.Trim('"');
-    }
-
-    private async Task<T?> GetAsync<T>(string relativeUrl, CancellationToken ct)
-    {
-        var client = BuildClient();
-        return await client.GetFromJsonAsync<T>(relativeUrl, ct);
-    }
-
-    private async Task<TOut?> PostAsync<TIn, TOut>(string relativeUrl, TIn payload, CancellationToken ct)
-    {
-        var client = BuildClient();
-        using var response = await client.PostAsJsonAsync(relativeUrl, payload, ct);
-        response.EnsureSuccessStatusCode();
-
-        if (response.Content.Headers.ContentLength == 0)
-        {
-            return default;
-        }
-
-        return await response.Content.ReadFromJsonAsync<TOut>(cancellationToken: ct);
-    }
-
-    private async Task DeleteAsync(string relativeUrl, CancellationToken ct)
-    {
-        var client = BuildClient();
-        using var response = await client.DeleteAsync(relativeUrl, ct);
-        response.EnsureSuccessStatusCode();
-    }
-
-    private HttpClient BuildClient()
-    {
-        var request = _httpContextAccessor.HttpContext?.Request;
-
-        string baseUri;
-        if (request is not null)
-        {
-            baseUri = $"{request.Scheme}://{request.Host}";
-        }
-        else
-        {
-            var aspnetcoreUrls = Environment.GetEnvironmentVariable("ASPNETCORE_URLS")
-                                ?? _configuration["ASPNETCORE_URLS"]
-                                ?? "http://127.0.0.1:8080";
-
-            baseUri = aspnetcoreUrls.Split(';', StringSplitOptions.RemoveEmptyEntries)
-                .FirstOrDefault(x => x.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
-                ?? "http://127.0.0.1:8080";
-        }
-
-        var client = _factory.CreateClient(nameof(InternalApiClient));
-        client.BaseAddress = new Uri(baseUri);
-        return client;
+            JsonFileCount = jsonFiles.Length,
+            TotalJsonBytes = totalBytes
+        });
     }
 
     public sealed class FetchRepositoriesResult
