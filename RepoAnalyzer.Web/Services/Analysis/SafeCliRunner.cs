@@ -81,7 +81,7 @@ public sealed class SafeCliRunner
         var buffer = new StringBuilder();
         var chunk = new char[1024];
 
-        while (!reader.EndOfStream)
+        while (true)
         {
             var read = await reader.ReadAsync(chunk.AsMemory(0, chunk.Length), ct);
             if (read == 0)

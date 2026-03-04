@@ -1388,7 +1388,7 @@ public sealed class RepositoryAnalyzerService
     {
         return project.Path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) ||
                project.ProjectType.Contains(".NET", StringComparison.OrdinalIgnoreCase) ||
-               project.Framework.Contains(".NET", StringComparison.OrdinalIgnoreCase) ||
+               (project.Framework?.Contains(".NET", StringComparison.OrdinalIgnoreCase) ?? false) ||
                project.Language.Equals("C#", StringComparison.OrdinalIgnoreCase);
     }
 

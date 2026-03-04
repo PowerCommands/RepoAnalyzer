@@ -35,6 +35,12 @@ main {
     vertical-align: middle;
 }
 
+.sbom-tool-icon {
+    width: 64px;
+    height: 64px;
+    object-fit: contain;
+}
+
 @media (min-width: 1200px) {
     .dashboard-stats-grid .dashboard-stat-item {
         flex: 0 0 20% !important;

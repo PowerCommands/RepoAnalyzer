@@ -95,8 +95,8 @@
             </MudItem>
             <MudItem xs="12" sm="6" md="3" Class="dashboard-stat-item">
                 <MudPaper Class="pa-3">
-                    <MudText Typo="Typo.caption">JSON Data Size</MudText>
-                    <MudText Typo="Typo.h5">@DashboardJsonSizeMbDisplay MB</MudText>
+                    <MudText Typo="Typo.caption">Stored Data Size (JSON + SBOM)</MudText>
+                    <MudText Typo="Typo.h5">@DashboardStoredSizeMbDisplay MB</MudText>
                 </MudPaper>
             </MudItem>
         </MudGrid>
@@ -779,6 +779,7 @@
                                         <MudStack Row="true" Spacing="1">
                                             <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" Disabled="@BatchIsRunning" OnClick="() => StartAnalyzeFromReposAsync(connection.Id, repo.Id)">@(latest is null ? "Analyze" : "Re-Analyze")</MudButton>
                                             <MudButton Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small" Disabled="@(latest is null)" OnClick="() => ViewComponentsForRepoAsync(repo.Id)">View components</MudButton>
+                                            <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Size="Size.Small" OnClick="() => OpenSbomForRepositoryAsync(connection.Id, repo.Id)">SBOM</MudButton>
                                             <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small" OnClick="() => DeleteRepositoryAsync(repo.Id)">Delete</MudButton>
                                         </MudStack>
                                     </MudStack>
@@ -882,6 +883,87 @@
         </MudPaper>
 
         <MudPaper Class="pa-4 mb-4">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                <MudText Typo="Typo.h6">SBOM</MudText>
+                <img src="/images/cdxgen.png" alt="CycloneDX icon" class="sbom-tool-icon" />
+            </MudStack>
+            <MudText Typo="Typo.caption">Generate CycloneDX SBOM from the latest analyzed dependency data. This parser never executes repository code.</MudText>
+
+            <MudGrid Class="mt-2">
+                <MudItem xs="12" md="3">
+                    <MudSelect T="string" Value="SbomConnectionId" ValueChanged="OnSbomConnectionChanged" Label="Connection" Variant="Variant.Outlined">
+                        @foreach (var connection in Connections)
+                        {
+                            <MudSelectItem Value="@connection.Id">@connection.Name</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" md="3">
+                    <MudSelect T="string" Value="SbomRepositoryId" ValueChanged="OnSbomRepositoryChanged" Label="Repository" Variant="Variant.Outlined" Disabled="@string.IsNullOrWhiteSpace(SbomConnectionId)">
+                        @foreach (var repo in SbomRepositories)
+                        {
+                            <MudSelectItem Value="@repo.Id">@RepoSelectorLabel(repo)</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" md="2">
+                    <MudSelect T="string" @bind-Value="SbomSpecVersion" Label="CycloneDX Version" Variant="Variant.Outlined">
+                        <MudSelectItem Value="1.7">1.7</MudSelectItem>
+                        <MudSelectItem Value="1.6">1.6</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" md="2">
+                    <MudSelect T="string" @bind-Value="SbomOutputType" Label="Output Type" Variant="Variant.Outlined">
+                        <MudSelectItem Value="@("Flat")">Flat list</MudSelectItem>
+                        <MudSelectItem Value="@("DependencyGraph")">Dependency graph</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" md="1">
+                    <MudSelect T="string" @bind-Value="SbomFormat" Label="Format" Variant="Variant.Outlined">
+                        <MudSelectItem Value="@("JSON")">JSON</MudSelectItem>
+                        <MudSelectItem Value="@("XML")">XML</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" md="1" Class="d-flex align-center">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@(!CanCreateSbom || SbomBusy)" OnClick="CreateSbomAsync">Create SBOM</MudButton>
+                </MudItem>
+            </MudGrid>
+
+            @if (SbomBusy)
+            {
+                <MudProgressLinear Class="mt-3" Color="Color.Info" Indeterminate="true" />
+                <MudText Typo="Typo.caption" Class="mt-1">@SbomStatusText</MudText>
+            }
+
+            <MudTable Items="SbomFiles" Dense="true" Hover="true" Class="mt-3">
+                <HeaderContent>
+                    <MudTh>Version</MudTh>
+                    <MudTh>Type</MudTh>
+                    <MudTh>Format</MudTh>
+                    <MudTh>File Name</MudTh>
+                    <MudTh>Created</MudTh>
+                    <MudTh>Size</MudTh>
+                    <MudTh>Actions</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@context.SpecVersion</MudTd>
+                    <MudTd>@context.OutputType</MudTd>
+                    <MudTd>@context.Format</MudTd>
+                    <MudTd>@context.FileName</MudTd>
+                    <MudTd>@context.CreatedAtUtc.ToString("u")</MudTd>
+                    <MudTd>@FormatFileSize(context.SizeBytes)</MudTd>
+                    <MudTd>
+                        <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info" Href="@Api.GetSbomDownloadUrl(context.Id)" Target="_blank">Download</MudButton>
+                        <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error" OnClick="() => DeleteSbomAsync(context.Id)">Delete</MudButton>
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <MudText Typo="Typo.caption">No SBOM files for current selection.</MudText>
+                </NoRecordsContent>
+            </MudTable>
+        </MudPaper>
+
+        <MudPaper Class="pa-4 mb-4">
             <MudText Typo="Typo.h6">Backup</MudText>
             <MudText Typo="Typo.caption">Create or restore a backup zip containing all JSON data files.</MudText>
 
@@ -972,12 +1054,12 @@
     private string AppName => Configuration["App:Name"] ?? "Repo Analyzer";
     private string AppVersion => Configuration["App:Version"] ?? "1.0.0";
 
-    private static readonly List<DistributionInfo> SupportedDistributions =
+    private readonly List<DistributionInfo> SupportedDistributions =
     [
-        new() { Name = "NuGet", IconPath = "/images/nuget.png", RuntimeVersion = ".NET SDK 8.0.418", ScannerTool = "dotnet list package" },
-        new() { Name = "NPM", IconPath = "/images/npm.png", RuntimeVersion = "Node v18.20.4 / npm 9.2.0", ScannerTool = "npm audit + npm outdated" },
-        new() { Name = "Maven", IconPath = "/images/maven.png", RuntimeVersion = "Apache Maven 3.8.7 / OpenJDK 17.0.18", ScannerTool = "maven-versions + owasp-dependency-check" },
-        new() { Name = "PyPI (pip)", IconPath = "/images/pip.png", RuntimeVersion = "Python 3.11.2 / pip 23.0.1", ScannerTool = "pip list + pip-audit" }
+        new() { Name = "NuGet", IconPath = "/images/nuget.png", RuntimeVersion = "Loading...", ScannerTool = "dotnet list package" },
+        new() { Name = "NPM", IconPath = "/images/npm.png", RuntimeVersion = "Loading...", ScannerTool = "npm audit + npm outdated" },
+        new() { Name = "Maven", IconPath = "/images/maven.png", RuntimeVersion = "Loading...", ScannerTool = "maven-versions + owasp-dependency-check" },
+        new() { Name = "PyPI (pip)", IconPath = "/images/pip.png", RuntimeVersion = "Loading...", ScannerTool = "pip list + pip-audit" }
     ];
 
     private string? Error;
@@ -1031,6 +1113,14 @@
     private string? RepoFetchConnectionId;
     private List<string> RepoFetchWorkspaceOptions = new();
     private HashSet<string> RepoFetchSelectedWorkspaces = new(StringComparer.OrdinalIgnoreCase);
+    private string? SbomConnectionId;
+    private string? SbomRepositoryId;
+    private string SbomSpecVersion = "1.7";
+    private string SbomOutputType = "Flat";
+    private string SbomFormat = "JSON";
+    private bool SbomBusy;
+    private string SbomStatusText = string.Empty;
+    private List<SbomFileResponse> SbomFiles = new();
     private int ActiveTabIndex;
     private List<ComponentRow> ComponentRows = new();
     private ComponentRow? SelectedComponentRow;
@@ -1063,8 +1153,8 @@
     private int DashboardNotAnalyzedCount => DashboardTotalRepositories - DashboardAnalyzedCount;
     private int DashboardVulnerabilities => Snapshots.Sum(s => s.Vulnerabilities.Count);
     private int DashboardOutdated => Snapshots.Sum(s => s.Outdated.Count);
-    private long DashboardJsonTotalBytes;
-    private string DashboardJsonSizeMbDisplay => (DashboardJsonTotalBytes / (1024d * 1024d)).ToString("0.00");
+    private long DashboardStoredTotalBytes;
+    private string DashboardStoredSizeMbDisplay => (DashboardStoredTotalBytes / (1024d * 1024d)).ToString("0.00");
 
     private int ComponentsRowsPerPage
     {
@@ -1093,6 +1183,18 @@
 
     private bool IsRepoFetchAdsConnection =>
         Connections.FirstOrDefault(x => x.Id == RepoFetchConnectionId)?.Type == ConnectionType.AzureDevOpsServer;
+
+    private List<RepositoryEntity> SbomRepositories =>
+        string.IsNullOrWhiteSpace(SbomConnectionId)
+            ? new List<RepositoryEntity>()
+            : Repositories.Where(r => r.ConnectionId == SbomConnectionId).OrderBy(r => r.Name).ToList();
+
+    private bool CanCreateSbom =>
+        !string.IsNullOrWhiteSpace(SbomConnectionId) &&
+        !string.IsNullOrWhiteSpace(SbomRepositoryId) &&
+        !string.IsNullOrWhiteSpace(SbomSpecVersion) &&
+        !string.IsNullOrWhiteSpace(SbomOutputType) &&
+        !string.IsNullOrWhiteSpace(SbomFormat);
 
     private string BatchSummaryText =>
         BatchTotalCount <= 0
@@ -1154,6 +1256,7 @@
         Error = null;
 
         Connections = await Api.GetConnectionsAsync();
+        await RefreshSupportedDistributionsAsync();
         Workspaces = await Api.GetWorkspacesAsync();
         Repositories = await Api.GetRepositoriesAsync();
         Snapshots = await Api.GetSnapshotsAsync();
@@ -1161,8 +1264,7 @@
         {
             await LoadHelpHtmlAsync();
         }
-        var storageStats = await Api.GetDataStorageStatsAsync();
-        DashboardJsonTotalBytes = storageStats.TotalJsonBytes;
+        await RefreshDataStorageStatsAsync();
 
         LatestSnapshotsByRepo = Snapshots.ToDictionary(x => x.RepositoryId, x => x, StringComparer.Ordinal);
 
@@ -1181,7 +1283,24 @@
             RepoFetchConnectionId = Connections[0].Id;
         }
 
+        if (string.IsNullOrWhiteSpace(SbomConnectionId) && Connections.Count > 0)
+        {
+            SbomConnectionId = Connections[0].Id;
+        }
+
+        if (!string.IsNullOrWhiteSpace(SbomRepositoryId))
+        {
+            var selectedRepoExists = Repositories.Any(r =>
+                string.Equals(r.Id, SbomRepositoryId, StringComparison.Ordinal) &&
+                string.Equals(r.ConnectionId, SbomConnectionId, StringComparison.Ordinal));
+            if (!selectedRepoExists)
+            {
+                SbomRepositoryId = null;
+            }
+        }
+
         await LoadRepoFetchWorkspaceOptionsAsync();
+        await ReloadSbomFilesAsync();
 
         DashboardNotAnalyzedRepos = Repositories
             .Where(r => !LatestSnapshotsByRepo.ContainsKey(r.Id))
@@ -1217,6 +1336,39 @@
         await ReloadLogsAsync();
         LoadAnalyzeSnapshotForSelection();
         RebuildSystemAlerts();
+    }
+
+    private async Task RefreshDataStorageStatsAsync()
+    {
+        var storageStats = await Api.GetDataStorageStatsAsync();
+        DashboardStoredTotalBytes = storageStats.TotalStoredBytes > 0
+            ? storageStats.TotalStoredBytes
+            : storageStats.TotalJsonBytes;
+    }
+
+    private async Task RefreshSupportedDistributionsAsync()
+    {
+        var toolVersions = await Api.GetToolchainVersionsAsync();
+
+        foreach (var distro in SupportedDistributions)
+        {
+            (distro.RuntimeVersion, distro.ScannerTool) = distro.Name switch
+            {
+                "NuGet" => (
+                    $"NuGet {toolVersions.NuGetVersion} / .NET SDK {toolVersions.DotNetSdkVersion}",
+                    toolVersions.NuGetScannerTool),
+                "NPM" => (
+                    $"npm {toolVersions.NodeVersion}",
+                    toolVersions.NpmScannerTool),
+                "Maven" => (
+                    toolVersions.MavenVersion,
+                    toolVersions.MavenScannerTool),
+                "PyPI (pip)" => (
+                    $"{toolVersions.PythonVersion} / {toolVersions.PipVersion}",
+                    toolVersions.PythonScannerTool),
+                _ => (distro.RuntimeVersion, distro.ScannerTool)
+            };
+        }
     }
 
     private async Task SaveConnectionAsync()
@@ -1324,6 +1476,14 @@
         ComponentRepositoryId = repositoryId;
         ActiveTabIndex = 1;
         await ReloadComponentsAsync();
+    }
+
+    private async Task OpenSbomForRepositoryAsync(string connectionId, string repositoryId)
+    {
+        SbomConnectionId = connectionId;
+        SbomRepositoryId = repositoryId;
+        ActiveTabIndex = 6;
+        await ReloadSbomFilesAsync();
     }
 
     private async Task DeleteRepositoryAsync(string repositoryId)
@@ -1721,6 +1881,93 @@
         RebuildSystemAlerts();
     }
 
+    private async Task OnSbomConnectionChanged(string value)
+    {
+        SbomConnectionId = value;
+        if (!SbomRepositories.Any(r => string.Equals(r.Id, SbomRepositoryId, StringComparison.Ordinal)))
+        {
+            SbomRepositoryId = null;
+        }
+
+        await ReloadSbomFilesAsync();
+    }
+
+    private async Task OnSbomRepositoryChanged(string value)
+    {
+        SbomRepositoryId = value;
+        await ReloadSbomFilesAsync();
+    }
+
+    private async Task ReloadSbomFilesAsync()
+    {
+        SbomFiles = await Api.GetSbomFilesAsync(SbomConnectionId, SbomRepositoryId);
+    }
+
+    private async Task CreateSbomAsync()
+    {
+        if (!CanCreateSbom)
+        {
+            Error = "Select connection, repository, CycloneDX version, output type, and format first.";
+            return;
+        }
+
+        try
+        {
+            Error = null;
+            InfoMessage = null;
+            SbomBusy = true;
+            SbomStatusText = "Generating SBOM...";
+
+            var request = new SbomCreateRequest
+            {
+                ConnectionId = SbomConnectionId ?? string.Empty,
+                RepositoryId = SbomRepositoryId ?? string.Empty,
+                SpecVersion = SbomSpecVersion,
+                OutputType = SbomOutputType,
+                Format = SbomFormat
+            };
+
+            var generated = await Api.CreateSbomAsync(request);
+            await ReloadSbomFilesAsync();
+            await RefreshDataStorageStatsAsync();
+            InfoMessage = $"SBOM created: {generated.FileName}";
+        }
+        catch (Exception ex)
+        {
+            Error = ex.Message;
+        }
+        finally
+        {
+            SbomBusy = false;
+            SbomStatusText = string.Empty;
+        }
+    }
+
+    private async Task DeleteSbomAsync(string sbomId)
+    {
+        var confirmed = await ConfirmDangerAsync(
+            "Delete SBOM",
+            "Delete selected SBOM file?",
+            "Delete SBOM");
+        if (!confirmed)
+        {
+            return;
+        }
+
+        try
+        {
+            Error = null;
+            await Api.DeleteSbomAsync(sbomId);
+            await ReloadSbomFilesAsync();
+            await RefreshDataStorageStatsAsync();
+            InfoMessage = "SBOM file deleted.";
+        }
+        catch (Exception ex)
+        {
+            Error = ex.Message;
+        }
+    }
+
     private async Task LoadHelpHtmlAsync()
     {
         try
@@ -1887,6 +2134,21 @@
             _ => Color.Default
         };
 
+    private static string FormatFileSize(long bytes)
+    {
+        if (bytes < 1024)
+        {
+            return $"{bytes} B";
+        }
+
+        if (bytes < 1024 * 1024)
+        {
+            return $"{(bytes / 1024d):0.00} KB";
+        }
+
+        return $"{(bytes / (1024d * 1024d)):0.00} MB";
+    }
+
     private void OpenConnectionsTab()
     {
         ActiveTabIndex = 5;
@@ -1947,7 +2209,7 @@
 
         var dialog = await DialogService.ShowAsync<ConfirmDialog>(title, parameters, options);
         var result = await dialog.Result;
-        return !result.Canceled && result.Data is bool confirmed && confirmed;
+        return result is { Canceled: false, Data: bool confirmed } && confirmed;
     }
 
     private Task OnRestoreFileSelected(InputFileChangeEventArgs args)
@@ -2100,11 +2362,21 @@
 
     private void OnFindingRowClick(TableRowClickEventArgs<GlobalFinding> args)
     {
+        if (args.Item is null)
+        {
+            return;
+        }
+
         SelectFindingRow(args.Item);
     }
 
     private void OnComponentRowClick(TableRowClickEventArgs<ComponentRow> args)
     {
+        if (args.Item is null)
+        {
+            return;
+        }
+
         SelectComponentRow(args.Item);
     }
 

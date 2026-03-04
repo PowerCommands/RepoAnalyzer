@@ -15,6 +15,8 @@ public sealed class InternalApiClient
     private readonly AnalyzeRunService _analyzeRunService;
     private readonly IAnalysisLog _analysisLog;
     private readonly BackupService _backupService;
+    private readonly SafeCliRunner _safeCliRunner;
+    private readonly SbomService _sbomService;
     private readonly IConfiguration _configuration;
 
     public InternalApiClient(
@@ -26,6 +28,8 @@ public sealed class InternalApiClient
         AnalyzeRunService analyzeRunService,
         IAnalysisLog analysisLog,
         BackupService backupService,
+        SafeCliRunner safeCliRunner,
+        SbomService sbomService,
         IConfiguration configuration)
     {
         _connectionService = connectionService;
@@ -36,6 +40,8 @@ public sealed class InternalApiClient
         _analyzeRunService = analyzeRunService;
         _analysisLog = analysisLog;
         _backupService = backupService;
+        _safeCliRunner = safeCliRunner;
+        _sbomService = sbomService;
         _configuration = configuration;
     }
 
@@ -140,6 +146,23 @@ public sealed class InternalApiClient
     public async Task<BackupRestoreResult?> RestoreBackupAsync(string fileName, Stream stream, CancellationToken ct = default)
         => await _backupService.RestoreZipAsync(stream, ct);
 
+    public async Task<SbomFileResponse> CreateSbomAsync(SbomCreateRequest request, CancellationToken ct = default)
+        => await _sbomService.CreateAsync(request, ct);
+
+    public async Task<List<SbomFileResponse>> GetSbomFilesAsync(string? connectionId, string? repositoryId, CancellationToken ct = default)
+        => await _sbomService.ListAsync(connectionId, repositoryId, ct);
+
+    public async Task DeleteSbomAsync(string id, CancellationToken ct = default)
+    {
+        var deleted = await _sbomService.DeleteAsync(id, ct);
+        if (!deleted)
+        {
+            throw new InvalidOperationException("SBOM file was not found.");
+        }
+    }
+
+    public string GetSbomDownloadUrl(string id) => $"/internal-api/tools/sbom/{Uri.EscapeDataString(id)}/download";
+
     public Task<DataStorageStatsResponse> GetDataStorageStatsAsync(CancellationToken ct = default)
     {
         var dataPath = _configuration["DataPath"] ?? "/app/data";
@@ -150,12 +173,109 @@ public sealed class InternalApiClient
             .Select(path => new FileInfo(path))
             .Sum(file => file.Exists ? file.Length : 0L);
 
+        var sbomRoot = Path.Combine(dataPath, "sbom");
+        Directory.CreateDirectory(sbomRoot);
+        var sbomFiles = Directory.GetFiles(sbomRoot)
+            .Where(x => !string.Equals(Path.GetFileName(x), "index.json", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var sbomBytes = sbomFiles
+            .Select(path => new FileInfo(path))
+            .Sum(file => file.Exists ? file.Length : 0L);
+
         return Task.FromResult(new DataStorageStatsResponse
         {
             JsonFileCount = jsonFiles.Length,
-            TotalJsonBytes = totalBytes
+            TotalJsonBytes = totalBytes,
+            SbomFileCount = sbomFiles.Count,
+            TotalSbomBytes = sbomBytes,
+            TotalStoredBytes = totalBytes + sbomBytes
         });
     }
+
+    public async Task<ToolchainVersionsResponse> GetToolchainVersionsAsync(CancellationToken ct = default)
+    {
+        var dotnetSdkVersion = await RunVersionCommandAsync("dotnet", ["--version"], TimeSpan.FromSeconds(10), ct);
+        var nugetVersionRaw = await RunVersionCommandAsync("dotnet", ["nuget", "--version"], TimeSpan.FromSeconds(10), ct);
+        var nodeVersion = await RunVersionCommandAsync("npm", ["-v"], TimeSpan.FromSeconds(10), ct);
+        var mavenVersionRaw = await RunVersionCommandAsync("mvn", ["-v"], TimeSpan.FromSeconds(15), ct);
+        var pythonVersion = await RunVersionCommandAsync("python3", ["--version"], TimeSpan.FromSeconds(10), ct);
+        var pipVersion = await RunVersionCommandAsync("python3", ["-m", "pip", "--version"], TimeSpan.FromSeconds(10), ct);
+
+        var hasDotNet = IsAvailable(dotnetSdkVersion);
+        var hasNpm = IsAvailable(nodeVersion);
+        var hasMaven = IsAvailable(mavenVersionRaw);
+        var hasPython = IsAvailable(pythonVersion);
+
+        return new ToolchainVersionsResponse
+        {
+            DotNetSdkVersion = dotnetSdkVersion,
+            NuGetVersion = ExtractLastNonEmptyLine(nugetVersionRaw),
+            NodeVersion = nodeVersion,
+            MavenVersion = ExtractFirstNonEmptyLine(mavenVersionRaw),
+            PythonVersion = pythonVersion,
+            PipVersion = pipVersion,
+            NuGetScannerTool = hasDotNet
+                ? "dotnet list <project.csproj> package --vulnerable --include-transitive --format json + --outdated --include-transitive --format json"
+                : "Unavailable (dotnet not found)",
+            NpmScannerTool = hasNpm
+                ? "npm audit --json --package-lock-only + npm outdated --json"
+                : "Unavailable (npm not found)",
+            MavenScannerTool = hasMaven
+                ? "mvn versions:display-dependency-updates + mvn org.owasp:dependency-check-maven:check"
+                : "Unavailable (mvn not found)",
+            PythonScannerTool = hasPython
+                ? "python3 -m pip list --outdated --format=json + python3 -m pip_audit -r requirements.txt --format json"
+                : "Unavailable (python3 not found)"
+        };
+    }
+
+    private async Task<string> RunVersionCommandAsync(
+        string command,
+        IEnumerable<string> args,
+        TimeSpan timeout,
+        CancellationToken ct)
+    {
+        try
+        {
+            var result = await _safeCliRunner.RunAsync(
+                command,
+                args,
+                workingDirectory: AppContext.BaseDirectory,
+                timeout: timeout,
+                outputLimit: 8_192,
+                ct);
+
+            if (result.ExitCode != 0)
+            {
+                return "Unavailable";
+            }
+
+            var combined = string.IsNullOrWhiteSpace(result.StdOut)
+                ? result.StdErr
+                : result.StdOut;
+
+            return string.IsNullOrWhiteSpace(combined)
+                ? "Unavailable"
+                : combined.Trim();
+        }
+        catch
+        {
+            return "Unavailable";
+        }
+    }
+
+    private static string ExtractFirstNonEmptyLine(string text)
+        => text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault(line => !string.IsNullOrWhiteSpace(line))
+            ?? "Unavailable";
+
+    private static string ExtractLastNonEmptyLine(string text)
+        => text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .LastOrDefault(line => !string.IsNullOrWhiteSpace(line))
+            ?? "Unavailable";
+
+    private static bool IsAvailable(string text)
+        => !string.Equals(text, "Unavailable", StringComparison.OrdinalIgnoreCase);
 
     public sealed class FetchRepositoriesResult
     {
@@ -167,5 +287,19 @@ public sealed class InternalApiClient
     {
         public string FileName { get; set; } = string.Empty;
         public byte[] Bytes { get; set; } = Array.Empty<byte>();
+    }
+
+    public sealed class ToolchainVersionsResponse
+    {
+        public string DotNetSdkVersion { get; set; } = "Unavailable";
+        public string NuGetVersion { get; set; } = "Unavailable";
+        public string NodeVersion { get; set; } = "Unavailable";
+        public string MavenVersion { get; set; } = "Unavailable";
+        public string PythonVersion { get; set; } = "Unavailable";
+        public string PipVersion { get; set; } = "Unavailable";
+        public string NuGetScannerTool { get; set; } = "Unavailable";
+        public string NpmScannerTool { get; set; } = "Unavailable";
+        public string MavenScannerTool { get; set; } = "Unavailable";
+        public string PythonScannerTool { get; set; } = "Unavailable";
     }
 }

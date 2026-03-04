@@ -134,7 +134,34 @@ public static class InternalApiEndpoints
             return Results.Ok(restored);
         });
 
-        group.MapGet("/tools/storage/stats", (IConfiguration configuration) =>
+        group.MapPost("/tools/sbom/create", async (SbomCreateRequest request, SbomService sbom, CancellationToken ct) =>
+            Results.Ok(await sbom.CreateAsync(request, ct)));
+
+        group.MapGet("/tools/sbom", async (string? connectionId, string? repositoryId, SbomService sbom, CancellationToken ct) =>
+            Results.Ok(await sbom.ListAsync(connectionId, repositoryId, ct)));
+
+        group.MapGet("/tools/sbom/{id}/download", async (string id, SbomService sbom, CancellationToken ct) =>
+        {
+            var result = await sbom.ReadFileAsync(id, ct);
+            if (result is null)
+            {
+                return Results.NotFound();
+            }
+
+            var contentType = string.Equals(result.Value.Meta.Format, "XML", StringComparison.OrdinalIgnoreCase)
+                ? "application/xml"
+                : "application/json";
+
+            return Results.File(result.Value.Bytes, contentType, result.Value.Meta.FileName);
+        });
+
+        group.MapDelete("/tools/sbom/{id}", async (string id, SbomService sbom, CancellationToken ct) =>
+        {
+            var deleted = await sbom.DeleteAsync(id, ct);
+            return deleted ? Results.NoContent() : Results.NotFound();
+        });
+
+        group.MapGet("/tools/storage/stats", async (IConfiguration configuration, SbomService sbom, CancellationToken ct) =>
         {
             var dataPath = configuration["DataPath"] ?? "/app/data";
             Directory.CreateDirectory(dataPath);
@@ -144,10 +171,16 @@ public static class InternalApiEndpoints
                 .Select(path => new FileInfo(path))
                 .Sum(file => file.Exists ? file.Length : 0L);
 
+            var sbomBytes = await sbom.GetTotalSbomBytesAsync(ct);
+            var sbomCount = await sbom.GetSbomCountAsync(ct);
+
             var response = new DataStorageStatsResponse
             {
                 JsonFileCount = jsonFiles.Length,
-                TotalJsonBytes = totalBytes
+                TotalJsonBytes = totalBytes,
+                SbomFileCount = sbomCount,
+                TotalSbomBytes = sbomBytes,
+                TotalStoredBytes = totalBytes + sbomBytes
             };
 
             return Results.Ok(response);

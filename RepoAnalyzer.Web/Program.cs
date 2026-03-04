@@ -46,6 +46,7 @@ builder.Services.AddScoped<GitHubProvider>();
 builder.Services.AddScoped<AzureDevOpsServerProvider>();
 builder.Services.AddScoped<InternalApiClient>();
 builder.Services.AddSingleton<BackupService>();
+builder.Services.AddScoped<SbomService>();
 
 var app = builder.Build();
 
