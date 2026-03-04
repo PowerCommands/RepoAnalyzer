@@ -22,7 +22,7 @@ docker run --rm -p 8080:8080 -v repo-analyzer-data:/app/data repo-analyzer:local
 ## Publish Docker container with Dockube 
 
 ```bash
-build https://github.com/PowerCommands/RepoAnalyzer.git "repo-analyzer" --publish
+build https://github.com/PowerCommands/RepoAnalyzer.git "repo-analyzer" --publish --platform=linux/amd64
 ```
 
 ## How to use
