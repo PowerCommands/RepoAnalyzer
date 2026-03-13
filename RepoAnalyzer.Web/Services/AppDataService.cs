@@ -10,6 +10,8 @@ public sealed class AppDataService
     private const string RepositoriesFile = "repositories.json";
     private const string SnapshotsFile = "snapshots.json";
     private const string GlobalFindingsFile = "globalFindings.json";
+    private const string FeedPackagesFile = "feedPackages.json";
+    private const string ComponentFeedPackageLinksFile = "componentFeedPackageLinks.json";
 
     private readonly JsonFileStore _store;
 
@@ -32,4 +34,10 @@ public sealed class AppDataService
 
     public Task<List<GlobalFinding>> GetGlobalFindingsAsync(CancellationToken ct = default) => _store.ReadListAsync<GlobalFinding>(GlobalFindingsFile, ct);
     public Task SaveGlobalFindingsAsync(List<GlobalFinding> data, CancellationToken ct = default) => _store.WriteListAsync(GlobalFindingsFile, data, ct);
+
+    public Task<List<FeedPackage>> GetFeedPackagesAsync(CancellationToken ct = default) => _store.ReadListAsync<FeedPackage>(FeedPackagesFile, ct);
+    public Task SaveFeedPackagesAsync(List<FeedPackage> data, CancellationToken ct = default) => _store.WriteListAsync(FeedPackagesFile, data, ct);
+
+    public Task<List<ComponentFeedPackageLink>> GetComponentFeedPackageLinksAsync(CancellationToken ct = default) => _store.ReadListAsync<ComponentFeedPackageLink>(ComponentFeedPackageLinksFile, ct);
+    public Task SaveComponentFeedPackageLinksAsync(List<ComponentFeedPackageLink> data, CancellationToken ct = default) => _store.WriteListAsync(ComponentFeedPackageLinksFile, data, ct);
 }

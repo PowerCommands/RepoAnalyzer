@@ -48,6 +48,10 @@ main {
     }
 }
 
+.help-markdown {
+    padding: 1.75rem 2.25rem !important;
+}
+
 .help-markdown h1,
 .help-markdown h2,
 .help-markdown h3 {
@@ -57,6 +61,11 @@ main {
 .help-markdown p,
 .help-markdown li {
     line-height: 1.5;
+}
+
+.help-markdown ul,
+.help-markdown ol {
+    padding-left: 1.75rem;
 }
 
 .help-markdown code {

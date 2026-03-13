@@ -1,6 +1,8 @@
 using RepoAnalyzer.Web.Dto;
+using RepoAnalyzer.Web.Models.Enums;
 using RepoAnalyzer.Web.Services.Analysis;
 using RepoAnalyzer.Web.Services.Analysis.Logging;
+using RepoAnalyzer.Web.Services.Feeds;
 
 namespace RepoAnalyzer.Web.Services;
 
@@ -9,6 +11,7 @@ public static class InternalApiEndpoints
     public static IEndpointRouteBuilder MapInternalApi(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/internal-api");
+        var feedApi = app.MapGroup("/api/feeds");
 
         group.MapGet("/connections", async (ConnectionService service, CancellationToken ct) =>
             Results.Ok(await service.GetAllAsync(ct)));
@@ -173,6 +176,14 @@ public static class InternalApiEndpoints
 
             var sbomBytes = await sbom.GetTotalSbomBytesAsync(ct);
             var sbomCount = await sbom.GetSbomCountAsync(ct);
+            var feedRoot = Path.Combine(dataPath, "feeds");
+            Directory.CreateDirectory(feedRoot);
+            var feedFiles = Directory.Exists(feedRoot)
+                ? Directory.GetFiles(feedRoot, "*.nupkg", SearchOption.AllDirectories).ToList()
+                : new List<string>();
+            var feedBytes = feedFiles
+                .Select(path => new FileInfo(path))
+                .Sum(file => file.Exists ? file.Length : 0L);
 
             var response = new DataStorageStatsResponse
             {
@@ -180,10 +191,104 @@ public static class InternalApiEndpoints
                 TotalJsonBytes = totalBytes,
                 SbomFileCount = sbomCount,
                 TotalSbomBytes = sbomBytes,
-                TotalStoredBytes = totalBytes + sbomBytes
+                FeedFileCount = feedFiles.Count,
+                TotalFeedBytes = feedBytes,
+                TotalStoredBytes = totalBytes + sbomBytes + feedBytes
             };
 
             return Results.Ok(response);
+        });
+
+        feedApi.MapGet("/nuget/versions/{packageId}", async (string packageId, IFeedImportService importService, CancellationToken ct) =>
+            Results.Ok(await importService.GetAvailableVersionsAsync(packageId, ct)));
+
+        feedApi.MapPost("/nuget/import", async (NuGetFeedImportRequest request, IFeedImportService importService, CancellationToken ct) =>
+            Results.Ok(await importService.ImportAsync(request, ct)));
+
+        feedApi.MapGet("/packages", async (string? feedType, IFeedAdministrationService adminService, CancellationToken ct) =>
+        {
+            if (!Enum.TryParse<FeedType>(feedType, ignoreCase: true, out var parsedFeedType))
+            {
+                return Results.BadRequest("A valid feedType is required.");
+            }
+
+            return Results.Ok(await adminService.GetPackagesAsync(parsedFeedType, ct));
+        });
+
+        feedApi.MapPost("/packages/{id}/scan-vulnerabilities", async (string id, IFeedScannerService scannerService, CancellationToken ct) =>
+            Results.Ok(await scannerService.ScanVulnerabilitiesAsync(id, ct)));
+
+        feedApi.MapPost("/packages/{id}/check-outdated", async (string id, IFeedScannerService scannerService, CancellationToken ct) =>
+            Results.Ok(await scannerService.CheckOutdatedAsync(id, ct)));
+
+        feedApi.MapPost("/packages/scan-components", async (string? feedType, IFeedScannerService scannerService, CancellationToken ct) =>
+        {
+            if (!Enum.TryParse<FeedType>(feedType, ignoreCase: true, out var parsedFeedType))
+            {
+                return Results.BadRequest("A valid feedType is required.");
+            }
+
+            return Results.Ok(await scannerService.ScanAllAsync(parsedFeedType, ct));
+        });
+
+        feedApi.MapPost("/packages/{id}/update", async (string id, FeedPackageUpdateRequest request, IFeedAdministrationService adminService, CancellationToken ct) =>
+            Results.Ok(await adminService.UpdatePackageAsync(id, request.TargetVersion, request.KeepOldVersion, ct)));
+
+        feedApi.MapDelete("/packages/{id}", async (string id, IFeedAdministrationService adminService, CancellationToken ct) =>
+        {
+            await adminService.DeletePackageAsync(id, ct);
+            return Results.NoContent();
+        });
+
+        app.MapGet("/feeds/nuget/v3/index.json", (HttpRequest request) =>
+        {
+            var baseUrl = $"{request.Scheme}://{request.Host}";
+            var serviceIndex = new
+            {
+                version = "3.0.0",
+                resources = new object[]
+                {
+                    new
+                    {
+                        @id = $"{baseUrl}/feeds/nuget/v3/flatcontainer/",
+                        @type = "PackageBaseAddress/3.0.0",
+                        comment = "Repo Analyzer local NuGet feed"
+                    }
+                }
+            };
+
+            return Results.Ok(serviceIndex);
+        });
+
+        app.MapGet("/feeds/nuget/v3/flatcontainer/{packageId}/index.json", async (string packageId, IFeedAdministrationService adminService, CancellationToken ct) =>
+        {
+            var versions = await adminService.GetHostedNuGetVersionsAsync(packageId, ct);
+            return Results.Ok(new
+            {
+                versions
+            });
+        });
+
+        app.MapGet("/feeds/nuget/v3/flatcontainer/{packageId}/{version}/{fileName}", async (string packageId, string version, string fileName, IFeedAdministrationService adminService, CancellationToken ct) =>
+        {
+            var result = await adminService.GetNuGetPackageFileAsync(packageId, version, ct);
+            if (result is null)
+            {
+                return Results.NotFound();
+            }
+
+            return Results.File(result.Value.FilePath, "application/octet-stream", result.Value.DownloadFileName);
+        });
+
+        app.MapGet("/feeds/nuget/{packageId}/{version}/{fileName}", async (string packageId, string version, string fileName, IFeedAdministrationService adminService, CancellationToken ct) =>
+        {
+            var result = await adminService.GetNuGetPackageFileAsync(packageId, version, ct);
+            if (result is null)
+            {
+                return Results.NotFound();
+            }
+
+            return Results.File(result.Value.FilePath, "application/octet-stream", result.Value.DownloadFileName);
         });
 
         return app;

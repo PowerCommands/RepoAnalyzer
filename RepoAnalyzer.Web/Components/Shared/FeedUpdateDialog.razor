@@ -1,0 +1,133 @@
+@using RepoAnalyzer.Web.Dto
+@inject InternalApiClient Api
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="2">
+            <MudText Typo="Typo.h6">Update hosted package</MudText>
+            <MudText Typo="Typo.caption">@($"{PackageId} currently uses version {CurrentVersion}.")</MudText>
+
+            @if (!string.IsNullOrWhiteSpace(Error))
+            {
+                <MudAlert Severity="Severity.Error" Dense="true">@Error</MudAlert>
+            }
+
+            @if (UpdatedPackage is null)
+            {
+                <MudTextField @bind-Value="SelectedVersion" Label="Target version" Variant="Variant.Outlined" />
+                <MudCheckBox @bind-Value="KeepOldVersion" Label="Keep old version" />
+
+                <MudButton Variant="Variant.Outlined" Color="Color.Info" Disabled="@Busy" OnClick="LoadVersionsAsync">Load available versions</MudButton>
+
+                @if (Versions.Count > 0)
+                {
+                    <MudSelect T="string" @bind-Value="SelectedVersion" Label="Available versions" Variant="Variant.Outlined">
+                        @foreach (var version in Versions.OrderByDescending(x => x, StringComparer.OrdinalIgnoreCase))
+                        {
+                            <MudSelectItem Value="@version">@version</MudSelectItem>
+                        }
+                    </MudSelect>
+                }
+
+                @if (Busy)
+                {
+                    <MudProgressLinear Color="Color.Info" Indeterminate="true" />
+                }
+            }
+            else
+            {
+                <MudAlert Severity="Severity.Success" Dense="true">Package update completed successfully.</MudAlert>
+                <MudText Typo="Typo.body2">@($"Package ID: {UpdatedPackage.PackageId}")</MudText>
+                <MudText Typo="Typo.body2">@($"Version: {UpdatedPackage.Version}")</MudText>
+                <MudText Typo="Typo.body2">@($"Description: {UpdatedPackage.Description ?? "No description"}")</MudText>
+            }
+        </MudStack>
+    </DialogContent>
+
+    <DialogActions>
+        @if (UpdatedPackage is null)
+        {
+            <MudButton Variant="Variant.Text" Color="Color.Default" Disabled="@Busy" OnClick="Cancel">Cancel</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@Busy" OnClick="UpdateAsync">Update</MudButton>
+        }
+        else
+        {
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Close">Close</MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter]
+    public string FeedPackageId { get; set; } = string.Empty;
+
+    [Parameter]
+    public string PackageId { get; set; } = string.Empty;
+
+    [Parameter]
+    public string CurrentVersion { get; set; } = string.Empty;
+
+    [Parameter]
+    public string? SuggestedVersion { get; set; }
+
+    private string? SelectedVersion { get; set; }
+    private bool KeepOldVersion { get; set; }
+    private bool Busy { get; set; }
+    private string? Error { get; set; }
+    private List<string> Versions { get; set; } = new();
+    private FeedPackageView? UpdatedPackage { get; set; }
+
+    protected override void OnInitialized()
+    {
+        SelectedVersion = SuggestedVersion;
+    }
+
+    private async Task LoadVersionsAsync()
+    {
+        Busy = true;
+        Error = null;
+        try
+        {
+            var response = await Api.GetNuGetFeedVersionsAsync(PackageId);
+            Versions = response.Versions;
+            SelectedVersion ??= Versions.LastOrDefault();
+        }
+        catch (Exception ex)
+        {
+            Error = ex.Message;
+        }
+        finally
+        {
+            Busy = false;
+        }
+    }
+
+    private async Task UpdateAsync()
+    {
+        Busy = true;
+        Error = null;
+        try
+        {
+            UpdatedPackage = await Api.UpdateFeedPackageAsync(FeedPackageId, new FeedPackageUpdateRequest
+            {
+                TargetVersion = string.IsNullOrWhiteSpace(SelectedVersion) ? null : SelectedVersion,
+                KeepOldVersion = KeepOldVersion
+            });
+        }
+        catch (Exception ex)
+        {
+            Error = ex.Message;
+        }
+        finally
+        {
+            Busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Close() => MudDialog.Close(DialogResult.Ok(UpdatedPackage));
+}

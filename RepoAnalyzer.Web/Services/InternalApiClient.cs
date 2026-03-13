@@ -1,7 +1,9 @@
 using RepoAnalyzer.Web.Dto;
 using RepoAnalyzer.Web.Models;
+using RepoAnalyzer.Web.Models.Enums;
 using RepoAnalyzer.Web.Services.Analysis;
 using RepoAnalyzer.Web.Services.Analysis.Logging;
+using RepoAnalyzer.Web.Services.Feeds;
 
 namespace RepoAnalyzer.Web.Services;
 
@@ -17,6 +19,9 @@ public sealed class InternalApiClient
     private readonly BackupService _backupService;
     private readonly SafeCliRunner _safeCliRunner;
     private readonly SbomService _sbomService;
+    private readonly IFeedImportService _feedImportService;
+    private readonly IFeedAdministrationService _feedAdministrationService;
+    private readonly IFeedScannerService _feedScannerService;
     private readonly IConfiguration _configuration;
 
     public InternalApiClient(
@@ -30,6 +35,9 @@ public sealed class InternalApiClient
         BackupService backupService,
         SafeCliRunner safeCliRunner,
         SbomService sbomService,
+        IFeedImportService feedImportService,
+        IFeedAdministrationService feedAdministrationService,
+        IFeedScannerService feedScannerService,
         IConfiguration configuration)
     {
         _connectionService = connectionService;
@@ -42,6 +50,9 @@ public sealed class InternalApiClient
         _backupService = backupService;
         _safeCliRunner = safeCliRunner;
         _sbomService = sbomService;
+        _feedImportService = feedImportService;
+        _feedAdministrationService = feedAdministrationService;
+        _feedScannerService = feedScannerService;
         _configuration = configuration;
     }
 
@@ -106,6 +117,33 @@ public sealed class InternalApiClient
 
     public async Task<List<Component>> GetComponentsAsync(string? nameFilter, string? repositoryId, int? take = null, CancellationToken ct = default)
         => await _queryService.GetLatestComponentsAsync(nameFilter, repositoryId, take, ct);
+
+    public async Task<NuGetFeedVersionsResponse> GetNuGetFeedVersionsAsync(string packageId, CancellationToken ct = default)
+        => await _feedImportService.GetAvailableVersionsAsync(packageId, ct);
+
+    public async Task<FeedPackageView> ImportNuGetPackageAsync(NuGetFeedImportRequest request, CancellationToken ct = default)
+        => await _feedImportService.ImportAsync(request, ct);
+
+    public async Task<List<FeedPackageView>> GetFeedPackagesAsync(FeedType feedType, CancellationToken ct = default)
+        => await _feedAdministrationService.GetPackagesAsync(feedType, ct);
+
+    public async Task<List<string>> GetHostedNuGetVersionsAsync(string packageId, CancellationToken ct = default)
+        => await _feedAdministrationService.GetHostedNuGetVersionsAsync(packageId, ct);
+
+    public async Task<FeedPackageView> ScanFeedPackageVulnerabilitiesAsync(string id, CancellationToken ct = default)
+        => await _feedScannerService.ScanVulnerabilitiesAsync(id, ct);
+
+    public async Task<FeedPackageView> CheckFeedPackageOutdatedAsync(string id, CancellationToken ct = default)
+        => await _feedScannerService.CheckOutdatedAsync(id, ct);
+
+    public async Task<List<FeedPackageView>> ScanAllFeedPackagesAsync(FeedType feedType, CancellationToken ct = default)
+        => await _feedScannerService.ScanAllAsync(feedType, ct);
+
+    public async Task<FeedPackageView> UpdateFeedPackageAsync(string id, FeedPackageUpdateRequest request, CancellationToken ct = default)
+        => await _feedAdministrationService.UpdatePackageAsync(id, request.TargetVersion, request.KeepOldVersion, ct);
+
+    public async Task DeleteFeedPackageAsync(string id, CancellationToken ct = default)
+        => await _feedAdministrationService.DeletePackageAsync(id, ct);
 
     public async Task DeleteAnalysisAsync(string repositoryId, CancellationToken ct = default)
         => await _repositoryAnalyzerService.ClearRepositoryAnalysisAsync(repositoryId, ct);
@@ -181,6 +219,12 @@ public sealed class InternalApiClient
         var sbomBytes = sbomFiles
             .Select(path => new FileInfo(path))
             .Sum(file => file.Exists ? file.Length : 0L);
+        var feedRoot = Path.Combine(dataPath, "feeds");
+        Directory.CreateDirectory(feedRoot);
+        var feedFiles = Directory.GetFiles(feedRoot, "*.nupkg", SearchOption.AllDirectories).ToList();
+        var feedBytes = feedFiles
+            .Select(path => new FileInfo(path))
+            .Sum(file => file.Exists ? file.Length : 0L);
 
         return Task.FromResult(new DataStorageStatsResponse
         {
@@ -188,7 +232,9 @@ public sealed class InternalApiClient
             TotalJsonBytes = totalBytes,
             SbomFileCount = sbomFiles.Count,
             TotalSbomBytes = sbomBytes,
-            TotalStoredBytes = totalBytes + sbomBytes
+            FeedFileCount = feedFiles.Count,
+            TotalFeedBytes = feedBytes,
+            TotalStoredBytes = totalBytes + sbomBytes + feedBytes
         });
     }
 

@@ -6,6 +6,7 @@
 @inject InternalApiClient Api
 @inject IJSRuntime Js
 @inject IDialogService DialogService
+@inject NavigationManager Navigation
 @inject IConfiguration Configuration
 @inject IWebHostEnvironment Env
 
@@ -95,8 +96,14 @@
             </MudItem>
             <MudItem xs="12" sm="6" md="3" Class="dashboard-stat-item">
                 <MudPaper Class="pa-3">
-                    <MudText Typo="Typo.caption">Stored Data Size (JSON + SBOM)</MudText>
+                    <MudText Typo="Typo.caption">Stored Data Size (JSON + SBOM + Feeds)</MudText>
                     <MudText Typo="Typo.h5">@DashboardStoredSizeMbDisplay MB</MudText>
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="12" sm="6" md="3" Class="dashboard-stat-item">
+                <MudPaper Class="pa-3">
+                    <MudText Typo="Typo.caption">Hosted Feed Packages</MudText>
+                    <MudText Typo="Typo.h5">@DashboardFeedPackageCount</MudText>
                 </MudPaper>
             </MudItem>
         </MudGrid>
@@ -217,6 +224,7 @@
                 <MudTh>Fixed</MudTh>
                 <MudTh>Transitive</MudTh>
                 <MudTh>Repository</MudTh>
+                <MudTh>Actions</MudTh>
             </HeaderContent>
             <RowTemplate>
                 <MudTd>
@@ -294,6 +302,11 @@
                     <MudBadge Content="@context.TransitiveCount" Color="Color.Info" Dot="false" />
                 </MudTd>
                 <MudTd>@context.RepositoryName</MudTd>
+                <MudTd>
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Secondary" OnClick="() => OpenFeedImportDialogForComponentAsync(context)">
+                        Add to local Feed
+                    </MudButton>
+                </MudTd>
             </RowTemplate>
             <PagerContent>
                 <MudTablePager PageSizeOptions="new int[] { 100, 200, 500 }" />
@@ -303,7 +316,12 @@
         @if (SelectedComponentRow is not null)
         {
             <MudPaper Class="pa-3 mt-3">
-                <MudText Typo="Typo.subtitle1">@($"{SelectedComponentRow.Name} ({SelectedComponentRow.InstalledVersion})")</MudText>
+                <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                    <MudText Typo="Typo.subtitle1">@($"{SelectedComponentRow.Name} ({SelectedComponentRow.InstalledVersion})")</MudText>
+                    <MudButton Variant="Variant.Filled" Color="Color.Secondary" OnClick="() => OpenFeedImportDialogForComponentAsync(SelectedComponentRow)">
+                        Add to local Feed
+                    </MudButton>
+                </MudStack>
                 <MudText Typo="Typo.caption">Ecosystem: @SelectedComponentRow.Ecosystem | Status: @SelectedComponentRow.StatusLabel | Fixed: @SelectedComponentRow.FixedVersion</MudText>
                 <MudText Typo="Typo.caption">Repository: @SelectedComponentRow.RepositoryName | Project: @ProjectName(SelectedComponentRow.ProjectId)</MudText>
                 <MudText Typo="Typo.caption">Path: @SelectedComponentRow.Path</MudText>
@@ -860,6 +878,138 @@
         </MudTable>
     </MudTabPanel>
 
+    <MudTabPanel Text="Feeds">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+            <MudText Typo="Typo.h6">Feeds</MudText>
+            <MudStack Row="true" Spacing="1">
+                <MudButton Variant="Variant.Outlined" Color="Color.Info" Disabled="@(FeedPackages.Count == 0 || FeedScanBusy)" OnClick="ScanAllFeedPackagesAsync">Scan components</MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="OpenFeedImportDialogAsync">Import package</MudButton>
+            </MudStack>
+        </MudStack>
+
+        <MudGrid Class="mt-2">
+            <MudItem xs="12" md="4">
+                <MudSelect T="FeedType" Value="SelectedFeedType" ValueChanged="OnFeedTypeChanged" Label="Feed type" Variant="Variant.Outlined">
+                    <MudSelectItem Value="@FeedType.NuGet">NuGet</MudSelectItem>
+                </MudSelect>
+            </MudItem>
+        </MudGrid>
+
+        <MudPaper Class="pa-3 mt-3">
+            <MudText Typo="Typo.subtitle2">Feed URL</MudText>
+            <MudText Typo="Typo.caption">Use this URL in Visual Studio or another NuGet client to add the selected feed source.</MudText>
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mt-2">
+                <MudTextField T="string" Value="@SelectedFeedSourceUrl" ReadOnly="true" Variant="Variant.Outlined" FullWidth="true" />
+                <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Color="Color.Primary" OnClick="CopySelectedFeedSourceUrlAsync" />
+            </MudStack>
+        </MudPaper>
+
+        <MudGrid Class="mt-3">
+            <MudItem xs="12" md="4">
+                <MudPaper Class="pa-3">
+                    <MudText Typo="Typo.caption">NuGet packages</MudText>
+                    <MudText Typo="Typo.h5">@NuGetFeedPackageCount</MudText>
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="12" md="4">
+                <MudPaper Class="pa-3">
+                    <MudText Typo="Typo.caption">Selected feed packages</MudText>
+                    <MudText Typo="Typo.h5">@FeedPackages.Count</MudText>
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="12" md="4">
+                <MudPaper Class="pa-3">
+                    <MudText Typo="Typo.caption">Packages on disk</MudText>
+                    <MudText Typo="Typo.h5">@FeedStorageSizeDisplay</MudText>
+                </MudPaper>
+            </MudItem>
+        </MudGrid>
+
+        @if (FeedScanBusy)
+        {
+            <MudProgressLinear Class="mt-3" Color="Color.Info" Indeterminate="true" />
+            <MudText Typo="Typo.caption" Class="mt-1">Scanning all hosted packages in the selected feed.</MudText>
+        }
+
+        <MudTable T="FeedPackageView" Items="FeedPackages" Dense="true" Hover="true" Class="mt-3">
+            <HeaderContent>
+                <MudTh></MudTh>
+                <MudTh>Package ID</MudTh>
+                <MudTh>Version</MudTh>
+                <MudTh>Description</MudTh>
+                <MudTh>Vulnerability status</MudTh>
+                <MudTh>Outdated status</MudTh>
+                <MudTh>Latest known version</MudTh>
+                <MudTh>Created</MudTh>
+                <MudTh>Actions</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>
+                    <MudTooltip Text="Details">
+                        <MudIconButton Icon="@(IsFeedPackageExpanded(context.Id) ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                       Color="Color.Default"
+                                       Size="Size.Small"
+                                       OnClick="() => ToggleFeedPackageDetails(context)" />
+                    </MudTooltip>
+                </MudTd>
+                <MudTd>@context.PackageId</MudTd>
+                <MudTd>@context.Version</MudTd>
+                <MudTd>@FeedDescriptionText(context)</MudTd>
+                <MudTd>@context.VulnerabilityStatus</MudTd>
+                <MudTd>@context.OutdatedStatus</MudTd>
+                <MudTd>@(context.LatestKnownVersion ?? "-")</MudTd>
+                <MudTd>@context.CreatedUtc.ToString("yyyy-MM-dd")</MudTd>
+                <MudTd>
+                    <MudStack Row="true" Spacing="1">
+                        <MudTooltip Text="Update">
+                            <MudIconButton Icon="@Icons.Material.Filled.SystemUpdateAlt"
+                                           Color="Color.Primary"
+                                           Size="Size.Small"
+                                           OnClick="() => OpenFeedUpdateDialogAsync(context)" />
+                        </MudTooltip>
+                        <MudTooltip Text="Download">
+                            <MudIconButton Icon="@Icons.Material.Filled.Download"
+                                           Color="Color.Secondary"
+                                           Size="Size.Small"
+                                           Href="@context.DownloadUrl"
+                                           Target="_blank" />
+                        </MudTooltip>
+                        <MudTooltip Text="Delete">
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                           Color="Color.Error"
+                                           Size="Size.Small"
+                                           OnClick="() => DeleteFeedPackageAsync(context)" />
+                        </MudTooltip>
+                    </MudStack>
+                </MudTd>
+            </RowTemplate>
+            <ChildRowContent>
+                @if (IsFeedPackageExpanded(context.Id))
+                {
+                    <MudTr>
+                        <td colspan="9">
+                            <MudPaper Class="pa-3 my-2">
+                                <MudText Typo="Typo.subtitle1">@($"{context.PackageId} ({context.Version})")</MudText>
+                                <MudText Typo="Typo.caption">Feed type: @context.FeedType | Vulnerability status: @context.VulnerabilityStatus | Outdated status: @context.OutdatedStatus</MudText>
+                                <MudText Typo="Typo.caption">Latest known version: @(context.LatestKnownVersion ?? "-") | Created: @context.CreatedUtc.ToString("u")</MudText>
+                                <MudText Typo="Typo.caption">Description: @(string.IsNullOrWhiteSpace(context.Description) ? "No description" : context.Description)</MudText>
+                                <MudText Typo="Typo.caption">Stored file: @context.FilePath</MudText>
+
+                                <MudText Typo="Typo.subtitle2" Class="mt-3">Package metadata</MudText>
+                                <MudPaper Class="pa-3 mt-2" Style="background-color:#fafafa;">
+                                    <pre style="white-space:pre-wrap;margin:0;">@(context.MetadataJson ?? "No metadata available.")</pre>
+                                </MudPaper>
+                            </MudPaper>
+                        </td>
+                    </MudTr>
+                }
+            </ChildRowContent>
+            <NoRecordsContent>
+                <MudText Typo="Typo.caption">No packages are hosted in the selected feed yet.</MudText>
+            </NoRecordsContent>
+        </MudTable>
+    </MudTabPanel>
+
     <MudTabPanel Text="Tools">
         <MudPaper Class="pa-4 mb-4">
             <MudText Typo="Typo.h6">About</MudText>
@@ -1126,6 +1276,10 @@
     private ComponentRow? SelectedComponentRow;
     private List<ComponentLocationRow> SelectedComponentLocations = new();
     private List<TransitiveDependencyRow> SelectedComponentTransitiveRows = new();
+    private FeedType SelectedFeedType = FeedType.NuGet;
+    private List<FeedPackageView> FeedPackages = new();
+    private string? ExpandedFeedPackageId;
+    private bool FeedScanBusy;
     private List<TransitiveDependencyRow> SelectedFindingTransitiveRows = new();
     private List<LogEntryRow> LogEntries = new();
     private List<SystemAlertRow> SystemAlerts = new();
@@ -1136,7 +1290,7 @@
     private int _findingsRowsPerPage = 100;
     private bool _prefsLoaded;
     private bool _helpLoaded;
-    private string HelpHtml = "<p>Loading README...</p>";
+    private string HelpHtml = "<p>Loading help...</p>";
     private DateTimeOffset? _alertsClearedAtUtc;
 
     private List<string> ComponentSeverityOptions =>
@@ -1155,6 +1309,10 @@
     private int DashboardOutdated => Snapshots.Sum(s => s.Outdated.Count);
     private long DashboardStoredTotalBytes;
     private string DashboardStoredSizeMbDisplay => (DashboardStoredTotalBytes / (1024d * 1024d)).ToString("0.00");
+    private int DashboardFeedPackageCount => DataStorageStats.FeedFileCount;
+    private int NuGetFeedPackageCount => DataStorageStats.FeedFileCount;
+    private string FeedStorageSizeDisplay => FormatFileSize(DataStorageStats.TotalFeedBytes);
+    private DataStorageStatsResponse DataStorageStats = new();
 
     private int ComponentsRowsPerPage
     {
@@ -1195,6 +1353,12 @@
         !string.IsNullOrWhiteSpace(SbomSpecVersion) &&
         !string.IsNullOrWhiteSpace(SbomOutputType) &&
         !string.IsNullOrWhiteSpace(SbomFormat);
+
+    private string SelectedFeedSourceUrl => SelectedFeedType switch
+    {
+        FeedType.NuGet => $"{Navigation.BaseUri.TrimEnd('/')}/feeds/nuget/v3/index.json",
+        _ => Navigation.BaseUri.TrimEnd('/')
+    };
 
     private string BatchSummaryText =>
         BatchTotalCount <= 0
@@ -1332,6 +1496,7 @@
         RecentRuns = await Api.GetRecentAnalysisRunsAsync(20);
 
         await ReloadComponentsAsync();
+        await ReloadFeedPackagesAsync();
         await ReloadFindingsAsync();
         await ReloadLogsAsync();
         LoadAnalyzeSnapshotForSelection();
@@ -1340,10 +1505,10 @@
 
     private async Task RefreshDataStorageStatsAsync()
     {
-        var storageStats = await Api.GetDataStorageStatsAsync();
-        DashboardStoredTotalBytes = storageStats.TotalStoredBytes > 0
-            ? storageStats.TotalStoredBytes
-            : storageStats.TotalJsonBytes;
+        DataStorageStats = await Api.GetDataStorageStatsAsync();
+        DashboardStoredTotalBytes = DataStorageStats.TotalStoredBytes > 0
+            ? DataStorageStats.TotalStoredBytes
+            : DataStorageStats.TotalJsonBytes;
     }
 
     private async Task RefreshSupportedDistributionsAsync()
@@ -1482,7 +1647,7 @@
     {
         SbomConnectionId = connectionId;
         SbomRepositoryId = repositoryId;
-        ActiveTabIndex = 6;
+        ActiveTabIndex = 7;
         await ReloadSbomFilesAsync();
     }
 
@@ -1806,6 +1971,184 @@
         }
     }
 
+    private async Task ReloadFeedPackagesAsync()
+    {
+        FeedPackages = await Api.GetFeedPackagesAsync(SelectedFeedType);
+        if (!string.IsNullOrWhiteSpace(ExpandedFeedPackageId) && FeedPackages.All(x => !string.Equals(x.Id, ExpandedFeedPackageId, StringComparison.Ordinal)))
+        {
+            ExpandedFeedPackageId = null;
+        }
+    }
+
+    private async Task OnFeedTypeChanged(FeedType value)
+    {
+        SelectedFeedType = value;
+        ExpandedFeedPackageId = null;
+        await ReloadFeedPackagesAsync();
+    }
+
+    private async Task CopySelectedFeedSourceUrlAsync()
+    {
+        await Js.InvokeVoidAsync("repoAnalyzer.copyText", SelectedFeedSourceUrl);
+        InfoMessage = "Feed URL copied to clipboard.";
+    }
+
+    private async Task OpenFeedImportDialogAsync()
+    {
+        var dialog = await DialogService.ShowAsync<FeedImportDialog>(
+            "Import package",
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseOnEscapeKey = true });
+        var result = await dialog.Result;
+        if (result is null || result.Canceled)
+        {
+            return;
+        }
+
+        await ReloadFeedPackagesAsync();
+        if (result.Data is FeedPackageView package)
+        {
+            ExpandedFeedPackageId = package.Id;
+            InfoMessage = $"Package '{package.PackageId} {package.Version}' was imported into Feeds.";
+            ActiveTabIndex = 6;
+        }
+    }
+
+    private async Task OpenFeedImportDialogForComponentAsync(ComponentRow row)
+    {
+        var parameters = new DialogParameters<FeedImportDialog>
+        {
+            { x => x.DefaultPackageId, row.Name },
+            { x => x.DefaultVersion, row.InstalledVersion },
+            { x => x.UseCurrentVersionByDefault, string.Equals(row.Status, "OK", StringComparison.OrdinalIgnoreCase) }
+        };
+
+        var dialog = await DialogService.ShowAsync<FeedImportDialog>(
+            "Add to local Feed",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseOnEscapeKey = true });
+        var result = await dialog.Result;
+        if (result is null || result.Canceled)
+        {
+            return;
+        }
+
+        await ReloadFeedPackagesAsync();
+        if (result.Data is FeedPackageView package)
+        {
+            ExpandedFeedPackageId = package.Id;
+            InfoMessage = $"Package '{package.PackageId} {package.Version}' was imported and linked from Components.";
+            ActiveTabIndex = 6;
+        }
+    }
+
+    private void ToggleFeedPackageDetails(FeedPackageView package)
+    {
+        ExpandedFeedPackageId = string.Equals(ExpandedFeedPackageId, package.Id, StringComparison.Ordinal) ? null : package.Id;
+    }
+
+    private string FeedDescriptionText(FeedPackageView package)
+    {
+        if (string.IsNullOrWhiteSpace(package.Description))
+        {
+            return "No description";
+        }
+
+        if (IsFeedPackageExpanded(package.Id) || package.Description.Length <= 150)
+        {
+            return package.Description;
+        }
+
+        return package.Description[..150] + "...";
+    }
+
+    private bool IsFeedPackageExpanded(string id)
+        => string.Equals(ExpandedFeedPackageId, id, StringComparison.Ordinal);
+
+    private async Task ScanAllFeedPackagesAsync()
+    {
+        try
+        {
+            FeedScanBusy = true;
+            var updatedPackages = await Api.ScanAllFeedPackagesAsync(SelectedFeedType);
+            await ReloadFeedPackagesAsync();
+            if (!string.IsNullOrWhiteSpace(ExpandedFeedPackageId))
+            {
+                ExpandedFeedPackageId = updatedPackages.Any(x => string.Equals(x.Id, ExpandedFeedPackageId, StringComparison.Ordinal))
+                    ? ExpandedFeedPackageId
+                    : null;
+            }
+
+            InfoMessage = $"Feed scan finished for {updatedPackages.Count} package(s) in {SelectedFeedType}.";
+        }
+        catch (Exception ex)
+        {
+            Error = ex.Message;
+        }
+        finally
+        {
+            FeedScanBusy = false;
+        }
+    }
+
+    private async Task OpenFeedUpdateDialogAsync(FeedPackageView package)
+    {
+        var parameters = new DialogParameters<FeedUpdateDialog>
+        {
+            { x => x.FeedPackageId, package.Id },
+            { x => x.PackageId, package.PackageId },
+            { x => x.CurrentVersion, package.Version },
+            { x => x.SuggestedVersion, package.LatestKnownVersion }
+        };
+
+        var dialog = await DialogService.ShowAsync<FeedUpdateDialog>(
+            "Update package",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseOnEscapeKey = true });
+        var result = await dialog.Result;
+        if (result is null || result.Canceled)
+        {
+            return;
+        }
+
+        await ReloadFeedPackagesAsync();
+        if (result.Data is FeedPackageView updated)
+        {
+            ExpandedFeedPackageId = updated.Id;
+            await RefreshDataStorageStatsAsync();
+            InfoMessage = $"Package '{updated.PackageId}' was updated to version {updated.Version}.";
+        }
+    }
+
+    private async Task DeleteFeedPackageAsync(FeedPackageView package)
+    {
+        var confirmed = await ConfirmDangerAsync(
+            "Delete Feed Package",
+            $"Delete package '{package.PackageId} {package.Version}' from the selected feed?",
+            "Delete package");
+        if (!confirmed)
+        {
+            return;
+        }
+
+        try
+        {
+            Error = null;
+            await Api.DeleteFeedPackageAsync(package.Id);
+            if (string.Equals(ExpandedFeedPackageId, package.Id, StringComparison.Ordinal))
+            {
+                ExpandedFeedPackageId = null;
+            }
+
+            await ReloadFeedPackagesAsync();
+            await RefreshDataStorageStatsAsync();
+            InfoMessage = $"Package '{package.PackageId} {package.Version}' was deleted from Feeds.";
+        }
+        catch (Exception ex)
+        {
+            Error = ex.Message;
+        }
+    }
+
     private async Task ClearComponentFiltersAsync()
     {
         ComponentSearchText = null;
@@ -1972,21 +2315,21 @@
     {
         try
         {
-            var readmePath = Path.Combine(Env.ContentRootPath, "README.md");
-            if (!File.Exists(readmePath))
+            var helpPath = Path.Combine(Env.ContentRootPath, "help.md");
+            if (!File.Exists(helpPath))
             {
-                HelpHtml = "<p>README.md was not found in this deployment.</p>";
+                HelpHtml = "<p>help.md was not found in this deployment.</p>";
                 _helpLoaded = true;
                 return;
             }
 
-            var markdown = await File.ReadAllTextAsync(readmePath);
+            var markdown = await File.ReadAllTextAsync(helpPath);
             HelpHtml = Markdown.ToHtml(markdown);
             _helpLoaded = true;
         }
         catch (Exception ex)
         {
-            HelpHtml = $"<p>Failed to load README.md: {ex.Message}</p>";
+            HelpHtml = $"<p>Failed to load help.md: {ex.Message}</p>";
             _helpLoaded = true;
         }
     }

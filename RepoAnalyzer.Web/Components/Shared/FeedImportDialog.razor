@@ -1,0 +1,222 @@
+@using RepoAnalyzer.Web.Dto
+@using RepoAnalyzer.Web.Models.Enums
+@inject InternalApiClient Api
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="2">
+            <MudText Typo="Typo.h6">Import package into Feeds</MudText>
+
+            @if (!string.IsNullOrWhiteSpace(Error))
+            {
+                <MudAlert Severity="Severity.Error" Dense="true">@Error</MudAlert>
+            }
+
+            @if (ImportedPackage is null)
+            {
+                <MudSelect T="string" @bind-Value="SelectedFeedType" Label="Feed type" Variant="Variant.Outlined">
+                    <MudSelectItem Value="@FeedType.NuGet.ToString()">NuGet</MudSelectItem>
+                </MudSelect>
+
+                <MudTextField @bind-Value="PackageId" Label="Package ID" Variant="Variant.Outlined" />
+
+                @if (!string.IsNullOrWhiteSpace(DefaultVersion))
+                {
+                    <MudCheckBox @bind-Value="UseCurrentVersion" Label="Use current version" />
+                }
+
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Info" Disabled="@(Busy || UseCurrentVersion)" OnClick="LoadVersionsAsync">Load versions</MudButton>
+                    @if (Versions.Count > 0)
+                    {
+                        <MudText Typo="Typo.caption">@($"{Versions.Count} versions loaded")</MudText>
+                    }
+                </MudStack>
+
+                @if (Versions.Count > 0 && !UseCurrentVersion)
+                {
+                    <MudSelect T="string" @bind-Value="SelectedVersion" Label="@VersionLabel" Variant="Variant.Outlined">
+                        @foreach (var version in Versions.OrderByDescending(x => x, StringComparer.OrdinalIgnoreCase))
+                        {
+                            <MudSelectItem Value="@version">@VersionText(version)</MudSelectItem>
+                        }
+                    </MudSelect>
+                }
+                else
+                {
+                    <MudTextField @bind-Value="SelectedVersion" Label="@VersionLabel" Variant="Variant.Outlined" ReadOnly="@UseCurrentVersion" />
+                }
+
+                @if (Busy)
+                {
+                    <MudProgressLinear Color="Color.Info" Indeterminate="true" />
+                }
+            }
+            else
+            {
+                <MudAlert Severity="Severity.Success" Dense="true">Package import completed successfully.</MudAlert>
+                <MudText Typo="Typo.body2">@($"Package ID: {ImportedPackage.PackageId}")</MudText>
+                <MudText Typo="Typo.body2">@($"Version: {ImportedPackage.Version}")</MudText>
+                <MudText Typo="Typo.body2">@($"Description: {ImportedPackage.Description ?? "No description"}")</MudText>
+                <MudText Typo="Typo.body2">@($"Import status: Stored in {ImportedPackage.FeedType}")</MudText>
+            }
+        </MudStack>
+    </DialogContent>
+
+    <DialogActions>
+        @if (ImportedPackage is null)
+        {
+            <MudButton Variant="Variant.Text" Color="Color.Default" Disabled="@Busy" OnClick="Cancel">Cancel</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@Busy" OnClick="ImportAsync">Import</MudButton>
+        }
+        else
+        {
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Close">Close</MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter]
+    public string DefaultPackageId { get; set; } = string.Empty;
+
+    [Parameter]
+    public string? DefaultVersion { get; set; }
+
+    [Parameter]
+    public bool UseCurrentVersionByDefault { get; set; } = true;
+
+    private string SelectedFeedType { get; set; } = FeedType.NuGet.ToString();
+    private string PackageId { get; set; } = string.Empty;
+    private string? SelectedVersion { get; set; }
+    private bool Busy { get; set; }
+    private string? Error { get; set; }
+    private List<string> Versions { get; set; } = new();
+    private HashSet<string> ExistingVersions = new(StringComparer.OrdinalIgnoreCase);
+    private FeedPackageView? ImportedPackage { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        PackageId = DefaultPackageId;
+        UseCurrentVersion = UseCurrentVersionByDefault && !string.IsNullOrWhiteSpace(DefaultVersion);
+        SelectedVersion = UseCurrentVersion ? DefaultVersion : null;
+        await LoadExistingVersionsAsync();
+    }
+
+    private bool _useCurrentVersion;
+    private bool UseCurrentVersion
+    {
+        get => _useCurrentVersion;
+        set
+        {
+            _useCurrentVersion = value;
+            if (value && !string.IsNullOrWhiteSpace(DefaultVersion))
+            {
+                SelectedVersion = DefaultVersion;
+            }
+            else if (!value && string.Equals(SelectedVersion, DefaultVersion, StringComparison.OrdinalIgnoreCase))
+            {
+                SelectedVersion = null;
+            }
+        }
+    }
+
+    private bool SelectedVersionExistsInFeed =>
+        !string.IsNullOrWhiteSpace(SelectedVersion) &&
+        ExistingVersions.Contains(SelectedVersion);
+
+    private string VersionLabel =>
+        SelectedVersionExistsInFeed
+            ? "Version (Already exists in feed)"
+            : "Version";
+
+    private async Task LoadExistingVersionsAsync()
+    {
+        if (string.IsNullOrWhiteSpace(PackageId))
+        {
+            ExistingVersions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            return;
+        }
+
+        var existingVersions = await Api.GetHostedNuGetVersionsAsync(PackageId);
+        ExistingVersions = existingVersions.ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private async Task LoadVersionsAsync()
+    {
+        if (string.IsNullOrWhiteSpace(PackageId))
+        {
+            Error = "Package ID is required.";
+            return;
+        }
+
+        Busy = true;
+        Error = null;
+        try
+        {
+            await LoadExistingVersionsAsync();
+            var response = await Api.GetNuGetFeedVersionsAsync(PackageId);
+            Versions = response.Versions;
+            SelectedVersion ??= Versions.LastOrDefault();
+            if (Versions.Count == 0)
+            {
+                Error = "No versions were returned for this package.";
+            }
+        }
+        catch (Exception ex)
+        {
+            Error = ex.Message;
+        }
+        finally
+        {
+            Busy = false;
+        }
+    }
+
+    private async Task ImportAsync()
+    {
+        if (string.IsNullOrWhiteSpace(PackageId))
+        {
+            Error = "Package ID is required.";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(SelectedVersion))
+        {
+            Error = "Package version is required.";
+            return;
+        }
+
+        Busy = true;
+        Error = null;
+        try
+        {
+            await LoadExistingVersionsAsync();
+            ImportedPackage = await Api.ImportNuGetPackageAsync(new NuGetFeedImportRequest
+            {
+                PackageId = PackageId,
+                Version = SelectedVersion
+            });
+        }
+        catch (Exception ex)
+        {
+            Error = ex.Message;
+        }
+        finally
+        {
+            Busy = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Close() => MudDialog.Close(DialogResult.Ok(ImportedPackage));
+
+    private string VersionText(string version)
+        => ExistingVersions.Contains(version)
+            ? $"{version} (Already exists in feed)"
+            : version;
+}

@@ -4,6 +4,7 @@ using RepoAnalyzer.Web.Components;
 using RepoAnalyzer.Web.Services;
 using RepoAnalyzer.Web.Services.Analysis;
 using RepoAnalyzer.Web.Services.Analysis.Logging;
+using RepoAnalyzer.Web.Services.Feeds;
 using RepoAnalyzer.Web.Services.Providers;
 using RepoAnalyzer.Web.Services.Storage;
 
@@ -13,6 +14,7 @@ var dataPath = builder.Configuration["DataPath"] ?? "/app/data";
 Directory.CreateDirectory(dataPath);
 Directory.CreateDirectory(Path.Combine(dataPath, "keys"));
 Directory.CreateDirectory(Path.Combine(dataPath, "logs"));
+Directory.CreateDirectory(Path.Combine(dataPath, "feeds"));
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
@@ -22,6 +24,7 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddHttpClient(nameof(InternalApiClient));
 builder.Services.AddHttpClient(nameof(GitHubProvider));
 builder.Services.AddHttpClient(nameof(AzureDevOpsServerProvider));
+builder.Services.AddHttpClient(nameof(NuGetPackageSourceClient));
 
 builder.Services.AddDataProtection()
     .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(dataPath, "keys")));
@@ -47,6 +50,11 @@ builder.Services.AddScoped<AzureDevOpsServerProvider>();
 builder.Services.AddScoped<InternalApiClient>();
 builder.Services.AddSingleton<BackupService>();
 builder.Services.AddScoped<SbomService>();
+builder.Services.AddSingleton<FeedStoragePathService>();
+builder.Services.AddScoped<NuGetPackageSourceClient>();
+builder.Services.AddScoped<IFeedImportService, NuGetFeedImportService>();
+builder.Services.AddScoped<IFeedAdministrationService, FeedAdministrationService>();
+builder.Services.AddScoped<IFeedScannerService, FeedScannerService>();
 
 var app = builder.Build();
 
