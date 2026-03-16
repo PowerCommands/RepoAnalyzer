@@ -1,7 +1,5 @@
-using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
-using System.Xml.Linq;
 using RepoAnalyzer.Web.Dto;
 using RepoAnalyzer.Web.Models;
 using RepoAnalyzer.Web.Models.Enums;
@@ -9,44 +7,42 @@ using RepoAnalyzer.Web.Services.Analysis.Logging;
 
 namespace RepoAnalyzer.Web.Services.Feeds;
 
-public sealed class NuGetFeedImportService : IFeedImportService
+public sealed class PythonFeedImportService : IFeedImportService
 {
     private readonly AppDataService _data;
-    private readonly NuGetPackageSourceClient _nugetClient;
+    private readonly PyPiPackageSourceClient _pyPiClient;
     private readonly FeedStoragePathService _pathService;
-    private readonly ILogger<NuGetFeedImportService> _logger;
+    private readonly ILogger<PythonFeedImportService> _logger;
     private readonly IAnalysisLog _analysisLog;
 
-    public NuGetFeedImportService(
+    public PythonFeedImportService(
         AppDataService data,
-        NuGetPackageSourceClient nugetClient,
+        PyPiPackageSourceClient pyPiClient,
         FeedStoragePathService pathService,
-        ILogger<NuGetFeedImportService> logger,
+        ILogger<PythonFeedImportService> logger,
         IAnalysisLog analysisLog)
     {
         _data = data;
-        _nugetClient = nugetClient;
+        _pyPiClient = pyPiClient;
         _pathService = pathService;
         _logger = logger;
         _analysisLog = analysisLog;
     }
 
-    public FeedType FeedType => FeedType.NuGet;
+    public FeedType FeedType => FeedType.Python;
 
     public async Task<FeedPackageVersionsResponse> GetAvailableVersionsAsync(string packageId, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(packageId))
-        {
-            throw new InvalidOperationException("Package ID is required.");
-        }
-
-        var versions = await _nugetClient.GetVersionsAsync(packageId, ct);
+        var document = await _pyPiClient.GetProjectDocumentAsync(packageId, ct);
         return new FeedPackageVersionsResponse
         {
-            FeedType = FeedType.NuGet,
-            PackageId = packageId.Trim(),
-            LatestVersion = versions.LastOrDefault(),
-            Versions = versions
+            FeedType = FeedType.Python,
+            PackageId = document.PackageId,
+            LatestVersion = document.LatestVersion,
+            Versions = document.Versions.Keys
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+                .ToList()
         };
     }
 
@@ -62,16 +58,16 @@ public sealed class NuGetFeedImportService : IFeedImportService
             throw new InvalidOperationException("Package version is required.");
         }
 
-        var normalizedPackageId = NuGetPackageSourceClient.NormalizePackageId(request.PackageId);
-        var version = request.Version.Trim();
+        var normalizedPackageId = PyPiPackageSourceClient.NormalizePackageId(request.PackageId);
+        var requestedVersion = request.Version.Trim();
         var packages = await _data.GetFeedPackagesAsync(ct);
         var links = await _data.GetComponentFeedPackageLinksAsync(ct);
         var logContext = CreateLogContext();
 
         var existing = packages.FirstOrDefault(x =>
-            x.FeedType == FeedType.NuGet &&
+            x.FeedType == FeedType.Python &&
             string.Equals(x.NormalizedPackageId, normalizedPackageId, StringComparison.Ordinal) &&
-            string.Equals(x.Version, version, StringComparison.OrdinalIgnoreCase));
+            string.Equals(x.Version, requestedVersion, StringComparison.OrdinalIgnoreCase));
 
         if (existing is not null)
         {
@@ -86,11 +82,6 @@ public sealed class NuGetFeedImportService : IFeedImportService
                     ["feedType"] = existing.FeedType.ToString()
                 },
                 ct);
-            _logger.LogInformation(
-                "Component already exist in feed, download skipped. PackageId={PackageId}, Version={Version}, FeedType={FeedType}",
-                existing.PackageId,
-                existing.Version,
-                existing.FeedType);
             await EnsureComponentLinkAsync(existing.Id, request.ComponentId, links, ct);
             var refreshedLinks = await _data.GetComponentFeedPackageLinksAsync(ct);
             return FeedPackageMapper.ToView(existing, refreshedLinks);
@@ -100,24 +91,21 @@ public sealed class NuGetFeedImportService : IFeedImportService
         {
             await _analysisLog.InfoAsync(
                 "FeedImportStart",
-                "Starting NuGet package download for feed import.",
+                "Starting Python package download for feed import.",
                 logContext,
                 new Dictionary<string, object?>
                 {
                     ["packageId"] = request.PackageId,
-                    ["version"] = version,
-                    ["feedType"] = FeedType.NuGet.ToString()
+                    ["version"] = requestedVersion,
+                    ["feedType"] = FeedType.Python.ToString()
                 },
                 ct);
-            _logger.LogInformation(
-                "Starting NuGet package download for feed import. PackageId={PackageId}, Version={Version}",
-                request.PackageId,
-                version);
 
-            var packageBytes = await _nugetClient.DownloadPackageAsync(request.PackageId, version, ct);
-            var metadata = ReadMetadata(packageBytes);
+            var release = await _pyPiClient.GetReleaseAsync(request.PackageId, requestedVersion, ct);
+            var packageBytes = await _pyPiClient.DownloadFileAsync(release.File.Url, ct);
             var sha256 = Convert.ToHexString(SHA256.HashData(packageBytes)).ToLowerInvariant();
-            var filePath = _pathService.GetPackageFilePath(FeedType.NuGet, normalizedPackageId, metadata.Version);
+            var metadataJson = BuildMetadataJson(release);
+            var filePath = _pathService.GetPackageFilePath(FeedType.Python, release.NormalizedPackageId, release.Version, release.File.FileName);
 
             var fileDirectory = Path.GetDirectoryName(filePath);
             if (!string.IsNullOrWhiteSpace(fileDirectory))
@@ -129,12 +117,12 @@ public sealed class NuGetFeedImportService : IFeedImportService
 
             var package = new FeedPackage
             {
-                FeedType = FeedType.NuGet,
-                PackageId = metadata.Id,
-                NormalizedPackageId = NuGetPackageSourceClient.NormalizePackageId(metadata.Id),
-                Version = metadata.Version,
-                Description = metadata.Description,
-                MetadataJson = metadata.MetadataJson,
+                FeedType = FeedType.Python,
+                PackageId = release.PackageId,
+                NormalizedPackageId = release.NormalizedPackageId,
+                Version = release.Version,
+                Description = $"{release.File.PackageType ?? "distribution"}{(string.IsNullOrWhiteSpace(release.File.RequiresPython) ? string.Empty : $" | Requires-Python: {release.File.RequiresPython}")}",
+                MetadataJson = metadataJson,
                 FilePath = filePath,
                 Sha256 = sha256,
                 CreatedUtc = DateTimeOffset.UtcNow
@@ -145,7 +133,7 @@ public sealed class NuGetFeedImportService : IFeedImportService
 
             await _analysisLog.InfoAsync(
                 "FeedImportCompleted",
-                "NuGet package downloaded and stored successfully.",
+                "Python package downloaded and stored successfully.",
                 logContext,
                 new Dictionary<string, object?>
                 {
@@ -158,7 +146,7 @@ public sealed class NuGetFeedImportService : IFeedImportService
                 },
                 ct);
             _logger.LogInformation(
-                "NuGet package downloaded and stored successfully. PackageId={PackageId}, Version={Version}, Bytes={Bytes}, FilePath={FilePath}, Sha256={Sha256}",
+                "Python package downloaded and stored successfully. PackageId={PackageId}, Version={Version}, Bytes={Bytes}, FilePath={FilePath}, Sha256={Sha256}",
                 package.PackageId,
                 package.Version,
                 packageBytes.Length,
@@ -174,21 +162,21 @@ public sealed class NuGetFeedImportService : IFeedImportService
         {
             await _analysisLog.ErrorAsync(
                 "FeedImportFailed",
-                "NuGet package download failed for feed import.",
+                "Python package download failed for feed import.",
                 logContext,
                 ex,
                 new Dictionary<string, object?>
                 {
                     ["packageId"] = request.PackageId,
-                    ["version"] = version,
-                    ["feedType"] = FeedType.NuGet.ToString()
+                    ["version"] = requestedVersion,
+                    ["feedType"] = FeedType.Python.ToString()
                 },
                 ct);
             _logger.LogError(
                 ex,
-                "NuGet package download failed for feed import. PackageId={PackageId}, Version={Version}",
+                "Python package download failed for feed import. PackageId={PackageId}, Version={Version}",
                 request.PackageId,
-                version);
+                requestedVersion);
             throw;
         }
     }
@@ -218,68 +206,34 @@ public sealed class NuGetFeedImportService : IFeedImportService
         await _data.SaveComponentFeedPackageLinksAsync(links, ct);
     }
 
+    private static string BuildMetadataJson(PyPiPackageSourceClient.SelectedRelease release)
+    {
+        Dictionary<string, object?> metadata;
+        try
+        {
+            metadata = JsonSerializer.Deserialize<Dictionary<string, object?>>(release.File.MetadataJson)
+                ?? new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            metadata = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        metadata["name"] = release.PackageId;
+        metadata["version"] = release.Version;
+        metadata["filename"] = release.File.FileName;
+        metadata["packagetype"] = release.File.PackageType;
+        metadata["python_version"] = release.File.PythonVersion;
+        metadata["requires_python"] = release.File.RequiresPython;
+        metadata["sha256"] = release.File.Sha256;
+
+        return JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true });
+    }
+
     private static AnalysisLogContext CreateLogContext()
         => new()
         {
             AnalysisRunId = $"feeds-{Guid.NewGuid():N}",
             ProviderType = "Feeds"
         };
-
-    private static NuGetMetadata ReadMetadata(byte[] packageBytes)
-    {
-        using var packageStream = new MemoryStream(packageBytes, writable: false);
-        using var archive = new ZipArchive(packageStream, ZipArchiveMode.Read, leaveOpen: false);
-        var nuspecEntry = archive.Entries.FirstOrDefault(x => x.FullName.EndsWith(".nuspec", StringComparison.OrdinalIgnoreCase))
-            ?? throw new InvalidOperationException("The NuGet package does not contain a .nuspec file.");
-
-        using var entryStream = nuspecEntry.Open();
-        var document = XDocument.Load(entryStream);
-        var metadataElement = document.Root?.Elements().FirstOrDefault(x => x.Name.LocalName == "metadata")
-            ?? throw new InvalidOperationException("The NuGet package .nuspec does not contain metadata.");
-
-        var id = metadataElement.Elements().FirstOrDefault(x => x.Name.LocalName == "id")?.Value?.Trim();
-        var version = metadataElement.Elements().FirstOrDefault(x => x.Name.LocalName == "version")?.Value?.Trim();
-        if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(version))
-        {
-            throw new InvalidOperationException("The NuGet package .nuspec is missing id or version.");
-        }
-
-        var description = metadataElement.Elements().FirstOrDefault(x => x.Name.LocalName == "description")?.Value?.Trim();
-        var authors = metadataElement.Elements().FirstOrDefault(x => x.Name.LocalName == "authors")?.Value?.Trim();
-        var dependencies = metadataElement
-            .Descendants()
-            .Where(x => x.Name.LocalName == "dependency")
-            .Select(x => new
-            {
-                Id = x.Attribute("id")?.Value,
-                Version = x.Attribute("version")?.Value,
-                TargetFramework = x.Parent?.Attribute("targetFramework")?.Value
-            })
-            .ToList();
-
-        var metadataJson = JsonSerializer.Serialize(new
-        {
-            id,
-            version,
-            description,
-            authors,
-            dependencies
-        }, new JsonSerializerOptions { WriteIndented = true });
-
-        return new NuGetMetadata
-        {
-            Id = id,
-            Version = version,
-            Description = description,
-            MetadataJson = metadataJson
-        };
-    }
-
-    private sealed class NuGetMetadata
-    {
-        public string Id { get; set; } = string.Empty;
-        public string Version { get; set; } = string.Empty;
-        public string? Description { get; set; }
-        public string MetadataJson { get; set; } = string.Empty;
-    }
 }

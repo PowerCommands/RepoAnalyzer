@@ -1,3 +1,4 @@
+using System.Text.Json;
 using RepoAnalyzer.Web.Dto;
 using RepoAnalyzer.Web.Models.Enums;
 using RepoAnalyzer.Web.Services.Analysis;
@@ -179,7 +180,7 @@ public static class InternalApiEndpoints
             var feedRoot = Path.Combine(dataPath, "feeds");
             Directory.CreateDirectory(feedRoot);
             var feedFiles = Directory.Exists(feedRoot)
-                ? Directory.GetFiles(feedRoot, "*.nupkg", SearchOption.AllDirectories).ToList()
+                ? Directory.GetFiles(feedRoot, "*", SearchOption.AllDirectories).Where(File.Exists).ToList()
                 : new List<string>();
             var feedBytes = feedFiles
                 .Select(path => new FileInfo(path))
@@ -199,11 +200,18 @@ public static class InternalApiEndpoints
             return Results.Ok(response);
         });
 
-        feedApi.MapGet("/nuget/versions/{packageId}", async (string packageId, IFeedImportService importService, CancellationToken ct) =>
-            Results.Ok(await importService.GetAvailableVersionsAsync(packageId, ct)));
+        feedApi.MapGet("/{feedType}/versions/{**packageId}", async (string feedType, string packageId, FeedImportServiceResolver importResolver, CancellationToken ct) =>
+        {
+            if (!Enum.TryParse<FeedType>(feedType, ignoreCase: true, out var parsedFeedType))
+            {
+                return Results.BadRequest("A valid feedType is required.");
+            }
 
-        feedApi.MapPost("/nuget/import", async (NuGetFeedImportRequest request, IFeedImportService importService, CancellationToken ct) =>
-            Results.Ok(await importService.ImportAsync(request, ct)));
+            return Results.Ok(await importResolver.GetRequired(parsedFeedType).GetAvailableVersionsAsync(Uri.UnescapeDataString(packageId), ct));
+        });
+
+        feedApi.MapPost("/import", async (FeedPackageImportRequest request, FeedImportServiceResolver importResolver, CancellationToken ct) =>
+            Results.Ok(await importResolver.GetRequired(request.FeedType).ImportAsync(request, ct)));
 
         feedApi.MapGet("/packages", async (string? feedType, IFeedAdministrationService adminService, CancellationToken ct) =>
         {
@@ -262,7 +270,7 @@ public static class InternalApiEndpoints
 
         app.MapGet("/feeds/nuget/v3/flatcontainer/{packageId}/index.json", async (string packageId, IFeedAdministrationService adminService, CancellationToken ct) =>
         {
-            var versions = await adminService.GetHostedNuGetVersionsAsync(packageId, ct);
+            var versions = await adminService.GetHostedVersionsAsync(FeedType.NuGet, packageId, ct);
             return Results.Ok(new
             {
                 versions
@@ -271,7 +279,7 @@ public static class InternalApiEndpoints
 
         app.MapGet("/feeds/nuget/v3/flatcontainer/{packageId}/{version}/{fileName}", async (string packageId, string version, string fileName, IFeedAdministrationService adminService, CancellationToken ct) =>
         {
-            var result = await adminService.GetNuGetPackageFileAsync(packageId, version, ct);
+            var result = await adminService.GetPackageFileAsync(FeedType.NuGet, packageId, version, null, ct);
             if (result is null)
             {
                 return Results.NotFound();
@@ -282,13 +290,193 @@ public static class InternalApiEndpoints
 
         app.MapGet("/feeds/nuget/{packageId}/{version}/{fileName}", async (string packageId, string version, string fileName, IFeedAdministrationService adminService, CancellationToken ct) =>
         {
-            var result = await adminService.GetNuGetPackageFileAsync(packageId, version, ct);
+            var result = await adminService.GetPackageFileAsync(FeedType.NuGet, packageId, version, null, ct);
             if (result is null)
             {
                 return Results.NotFound();
             }
 
             return Results.File(result.Value.FilePath, "application/octet-stream", result.Value.DownloadFileName);
+        });
+
+        app.MapGet("/feeds/npm/-/tarball", async (string packageId, string version, IFeedAdministrationService adminService, CancellationToken ct) =>
+        {
+            var result = await adminService.GetPackageFileAsync(FeedType.Npm, packageId, version, null, ct);
+            if (result is null)
+            {
+                return Results.NotFound();
+            }
+
+            return Results.File(result.Value.FilePath, "application/octet-stream", result.Value.DownloadFileName);
+        });
+
+        app.MapGet("/feeds/npm/{**packageId}", async (string packageId, HttpRequest request, IFeedAdministrationService adminService, CancellationToken ct) =>
+        {
+            var decodedPackageId = Uri.UnescapeDataString(packageId);
+            var hostedPackages = await adminService.GetPackagesAsync(FeedType.Npm, ct);
+            var matchingPackages = hostedPackages
+                .Where(x => string.Equals(x.NormalizedPackageId, NpmPackageSourceClient.NormalizePackageId(decodedPackageId), StringComparison.Ordinal))
+                .OrderBy(x => x.Version, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (matchingPackages.Count == 0)
+            {
+                return Results.NotFound();
+            }
+
+            var baseUrl = $"{request.Scheme}://{request.Host}";
+            var latestVersion = matchingPackages
+                .Select(x => x.LatestKnownVersion)
+                .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x))
+                ?? matchingPackages.Last().Version;
+
+            var versions = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var package in matchingPackages)
+            {
+                Dictionary<string, object?> metadata;
+                try
+                {
+                    metadata = string.IsNullOrWhiteSpace(package.MetadataJson)
+                        ? new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                        : JsonSerializer.Deserialize<Dictionary<string, object?>>(package.MetadataJson) ?? new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+                }
+                catch
+                {
+                    metadata = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+                }
+
+                metadata["name"] = package.PackageId;
+                metadata["version"] = package.Version;
+                metadata["description"] = package.Description;
+                metadata["dist"] = new Dictionary<string, object?>
+                {
+                    ["tarball"] = $"{baseUrl}/feeds/npm/-/tarball?packageId={Uri.EscapeDataString(package.PackageId)}&version={Uri.EscapeDataString(package.Version)}"
+                };
+
+                versions[package.Version] = metadata;
+            }
+
+            var response = new Dictionary<string, object?>
+            {
+                ["_id"] = matchingPackages[0].PackageId,
+                ["name"] = matchingPackages[0].PackageId,
+                ["dist-tags"] = new Dictionary<string, string>
+                {
+                    ["latest"] = latestVersion
+                },
+                ["versions"] = versions
+            };
+
+            return Results.Ok(response);
+        });
+
+        app.MapGet("/feeds/pypi/simple", async (IFeedAdministrationService adminService, CancellationToken ct) =>
+        {
+            var packages = await adminService.GetPackagesAsync(FeedType.Python, ct);
+            var entries = packages
+                .Select(x => x.NormalizedPackageId)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+                .Select(x => $"<a href=\"/feeds/pypi/simple/{x}/\">{x}</a>");
+            var html = $$"""
+                         <!DOCTYPE html>
+                         <html>
+                         <body>
+                         {{string.Join(Environment.NewLine, entries)}}
+                         </body>
+                         </html>
+                         """;
+            return Results.Content(html, "text/html");
+        });
+
+        app.MapGet("/feeds/pypi/simple/{packageId}/", async (string packageId, HttpRequest request, IFeedAdministrationService adminService, CancellationToken ct) =>
+        {
+            var normalizedPackageId = PyPiPackageSourceClient.NormalizePackageId(packageId);
+            var packages = await adminService.GetPackagesAsync(FeedType.Python, ct);
+            var matchingPackages = packages
+                .Where(x => string.Equals(x.NormalizedPackageId, normalizedPackageId, StringComparison.Ordinal))
+                .OrderBy(x => x.Version, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (matchingPackages.Count == 0)
+            {
+                return Results.NotFound();
+            }
+
+            var baseUrl = $"{request.Scheme}://{request.Host}";
+            var entries = matchingPackages
+                .Select(x => $"<a href=\"{baseUrl}/feeds/pypi/packages/{Uri.EscapeDataString(x.NormalizedPackageId)}/{Uri.EscapeDataString(x.Version)}/{Uri.EscapeDataString(Path.GetFileName(x.FilePath))}#sha256={x.Sha256}\">{Path.GetFileName(x.FilePath)}</a>");
+            var html = $$"""
+                         <!DOCTYPE html>
+                         <html>
+                         <body>
+                         {{string.Join(Environment.NewLine, entries)}}
+                         </body>
+                         </html>
+                         """;
+            return Results.Content(html, "text/html");
+        });
+
+        app.MapGet("/feeds/pypi/packages/{packageId}/{version}/{fileName}", async (string packageId, string version, string fileName, IFeedAdministrationService adminService, CancellationToken ct) =>
+        {
+            var result = await adminService.GetPackageFileAsync(FeedType.Python, packageId, version, fileName, ct);
+            if (result is null)
+            {
+                return Results.NotFound();
+            }
+
+            return Results.File(result.Value.FilePath, "application/octet-stream", result.Value.DownloadFileName);
+        });
+
+        app.MapGet("/feeds/maven/{**assetPath}", async (string assetPath, IFeedAdministrationService adminService, CancellationToken ct) =>
+        {
+            var parts = assetPath.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (parts.Length >= 3 && string.Equals(parts[^1], "maven-metadata.xml", StringComparison.OrdinalIgnoreCase))
+            {
+                var artifactId = parts[^2];
+                var groupId = string.Join('.', parts.Take(parts.Length - 2));
+                var packageId = $"{groupId}:{artifactId}";
+                var versions = await adminService.GetHostedVersionsAsync(FeedType.Maven, packageId, ct);
+                if (versions.Count == 0)
+                {
+                    return Results.NotFound();
+                }
+
+                var latest = versions.Last();
+                var xml = $$"""
+                            <?xml version="1.0" encoding="UTF-8"?>
+                            <metadata>
+                              <groupId>{{groupId}}</groupId>
+                              <artifactId>{{artifactId}}</artifactId>
+                              <versioning>
+                                <latest>{{latest}}</latest>
+                                <release>{{latest}}</release>
+                                <versions>
+                            {{string.Join(Environment.NewLine, versions.Select(x => $"      <version>{x}</version>"))}}
+                                </versions>
+                              </versioning>
+                            </metadata>
+                            """;
+                return Results.Content(xml, "application/xml");
+            }
+
+            if (parts.Length >= 4)
+            {
+                var fileName = parts[^1];
+                var version = parts[^2];
+                var artifactId = parts[^3];
+                var groupId = string.Join('.', parts.Take(parts.Length - 3));
+                var packageId = $"{groupId}:{artifactId}";
+                var result = await adminService.GetPackageFileAsync(FeedType.Maven, packageId, version, fileName, ct);
+                if (result is null)
+                {
+                    return Results.NotFound();
+                }
+
+                return Results.File(result.Value.FilePath, "application/octet-stream", result.Value.DownloadFileName);
+            }
+
+            return Results.NotFound();
         });
 
         return app;

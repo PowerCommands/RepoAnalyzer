@@ -14,9 +14,19 @@
 
             @if (ImportedPackage is null)
             {
-                <MudSelect T="string" @bind-Value="SelectedFeedType" Label="Feed type" Variant="Variant.Outlined">
-                    <MudSelectItem Value="@FeedType.NuGet.ToString()">NuGet</MudSelectItem>
-                </MudSelect>
+                @if (AvailableFeedTypes.Count > 0)
+                {
+                    <MudSelect T="FeedType" @bind-Value="SelectedFeedType" Label="Feed type" Variant="Variant.Outlined">
+                        @foreach (var feedType in AvailableFeedTypes)
+                        {
+                            <MudSelectItem Value="@feedType">@FeedTypeLabel(feedType)</MudSelectItem>
+                        }
+                    </MudSelect>
+                }
+                else
+                {
+                    <MudAlert Severity="Severity.Warning" Dense="true">No supported feed distributions are available in the current runtime.</MudAlert>
+                }
 
                 <MudTextField @bind-Value="PackageId" Label="Package ID" Variant="Variant.Outlined" />
 
@@ -89,7 +99,13 @@
     [Parameter]
     public bool UseCurrentVersionByDefault { get; set; } = true;
 
-    private string SelectedFeedType { get; set; } = FeedType.NuGet.ToString();
+    [Parameter]
+    public FeedType DefaultFeedType { get; set; } = FeedType.NuGet;
+
+    [Parameter]
+    public List<FeedType> AvailableFeedTypes { get; set; } = new();
+
+    private FeedType SelectedFeedType { get; set; } = FeedType.NuGet;
     private string PackageId { get; set; } = string.Empty;
     private string? SelectedVersion { get; set; }
     private bool Busy { get; set; }
@@ -100,6 +116,9 @@
 
     protected override async Task OnInitializedAsync()
     {
+        SelectedFeedType = AvailableFeedTypes.Contains(DefaultFeedType)
+            ? DefaultFeedType
+            : AvailableFeedTypes.FirstOrDefault();
         PackageId = DefaultPackageId;
         UseCurrentVersion = UseCurrentVersionByDefault && !string.IsNullOrWhiteSpace(DefaultVersion);
         SelectedVersion = UseCurrentVersion ? DefaultVersion : null;
@@ -141,7 +160,7 @@
             return;
         }
 
-        var existingVersions = await Api.GetHostedNuGetVersionsAsync(PackageId);
+        var existingVersions = await Api.GetHostedFeedVersionsAsync(SelectedFeedType, PackageId);
         ExistingVersions = existingVersions.ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
@@ -158,9 +177,9 @@
         try
         {
             await LoadExistingVersionsAsync();
-            var response = await Api.GetNuGetFeedVersionsAsync(PackageId);
+            var response = await Api.GetFeedVersionsAsync(SelectedFeedType, PackageId);
             Versions = response.Versions;
-            SelectedVersion ??= Versions.LastOrDefault();
+            SelectedVersion ??= response.LatestVersion ?? Versions.LastOrDefault();
             if (Versions.Count == 0)
             {
                 Error = "No versions were returned for this package.";
@@ -194,9 +213,16 @@
         Error = null;
         try
         {
-            await LoadExistingVersionsAsync();
-            ImportedPackage = await Api.ImportNuGetPackageAsync(new NuGetFeedImportRequest
+            if (AvailableFeedTypes.Count == 0)
             {
+                Error = "No supported feed distributions are available in the current runtime.";
+                return;
+            }
+
+            await LoadExistingVersionsAsync();
+            ImportedPackage = await Api.ImportFeedPackageAsync(new FeedPackageImportRequest
+            {
+                FeedType = SelectedFeedType,
                 PackageId = PackageId,
                 Version = SelectedVersion
             });
@@ -219,4 +245,14 @@
         => ExistingVersions.Contains(version)
             ? $"{version} (Already exists in feed)"
             : version;
+
+    private static string FeedTypeLabel(FeedType feedType)
+        => feedType switch
+        {
+            FeedType.NuGet => "NuGet",
+            FeedType.Npm => "NPM",
+            FeedType.Python => "Python",
+            FeedType.Maven => "Maven",
+            _ => feedType.ToString()
+        };
 }

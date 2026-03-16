@@ -1,5 +1,6 @@
 using RepoAnalyzer.Web.Dto;
 using RepoAnalyzer.Web.Models;
+using RepoAnalyzer.Web.Models.Enums;
 
 namespace RepoAnalyzer.Web.Services.Feeds;
 
@@ -29,7 +30,24 @@ internal static class FeedPackageMapper
                 .Distinct(StringComparer.Ordinal)
                 .OrderBy(x => x, StringComparer.Ordinal)
                 .ToList(),
-            DownloadUrl = $"/feeds/nuget/v3/flatcontainer/{Uri.EscapeDataString(package.NormalizedPackageId)}/{Uri.EscapeDataString(package.Version)}/{Uri.EscapeDataString(package.NormalizedPackageId)}.{Uri.EscapeDataString(package.Version)}.nupkg"
+            DownloadUrl = BuildDownloadUrl(package)
         };
+    }
+
+    private static string BuildDownloadUrl(FeedPackage package)
+        => package.FeedType switch
+        {
+            FeedType.NuGet => $"/feeds/nuget/v3/flatcontainer/{Uri.EscapeDataString(package.NormalizedPackageId)}/{Uri.EscapeDataString(package.Version)}/{Uri.EscapeDataString(FeedStoragePathService.GetPackageFileName(package.FeedType, package.NormalizedPackageId, package.Version))}",
+            FeedType.Npm => $"/feeds/npm/-/tarball?packageId={Uri.EscapeDataString(package.PackageId)}&version={Uri.EscapeDataString(package.Version)}",
+            FeedType.Python => $"/feeds/pypi/packages/{Uri.EscapeDataString(package.NormalizedPackageId)}/{Uri.EscapeDataString(package.Version)}/{Uri.EscapeDataString(Path.GetFileName(package.FilePath))}",
+            FeedType.Maven => BuildMavenDownloadUrl(package),
+            _ => string.Empty
+        };
+
+    private static string BuildMavenDownloadUrl(FeedPackage package)
+    {
+        var coordinate = MavenPackageSourceClient.ParsePackageId(package.PackageId);
+        var groupPath = MavenPackageSourceClient.GetGroupPath(coordinate.GroupId);
+        return $"/feeds/maven/{groupPath}/{Uri.EscapeDataString(coordinate.ArtifactId)}/{Uri.EscapeDataString(package.Version)}/{Uri.EscapeDataString(Path.GetFileName(package.FilePath))}";
     }
 }

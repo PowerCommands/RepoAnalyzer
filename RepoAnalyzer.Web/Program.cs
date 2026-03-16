@@ -25,6 +25,9 @@ builder.Services.AddHttpClient(nameof(InternalApiClient));
 builder.Services.AddHttpClient(nameof(GitHubProvider));
 builder.Services.AddHttpClient(nameof(AzureDevOpsServerProvider));
 builder.Services.AddHttpClient(nameof(NuGetPackageSourceClient));
+builder.Services.AddHttpClient(nameof(NpmPackageSourceClient));
+builder.Services.AddHttpClient(nameof(PyPiPackageSourceClient));
+builder.Services.AddHttpClient(nameof(MavenPackageSourceClient));
 
 builder.Services.AddDataProtection()
     .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(dataPath, "keys")));
@@ -52,7 +55,14 @@ builder.Services.AddSingleton<BackupService>();
 builder.Services.AddScoped<SbomService>();
 builder.Services.AddSingleton<FeedStoragePathService>();
 builder.Services.AddScoped<NuGetPackageSourceClient>();
+builder.Services.AddScoped<NpmPackageSourceClient>();
+builder.Services.AddScoped<PyPiPackageSourceClient>();
+builder.Services.AddScoped<MavenPackageSourceClient>();
 builder.Services.AddScoped<IFeedImportService, NuGetFeedImportService>();
+builder.Services.AddScoped<IFeedImportService, NpmFeedImportService>();
+builder.Services.AddScoped<IFeedImportService, PythonFeedImportService>();
+builder.Services.AddScoped<IFeedImportService, MavenFeedImportService>();
+builder.Services.AddScoped<FeedImportServiceResolver>();
 builder.Services.AddScoped<IFeedAdministrationService, FeedAdministrationService>();
 builder.Services.AddScoped<IFeedScannerService, FeedScannerService>();
 

@@ -11,8 +11,14 @@ RUN dotnet publish RepoAnalyzer.Web/RepoAnalyzer.Web.csproj -c Release -o /app/p
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS final
 WORKDIR /app
 
+ARG NO_PYTHON=false
+ARG NO_MAVEN=false
+
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends nodejs npm ca-certificates maven openjdk-17-jre-headless python3 python3-pip python3-venv python-is-python3 \
+    && packages="nodejs npm ca-certificates" \
+    && if [ "$NO_MAVEN" != "true" ]; then packages="$packages maven openjdk-17-jre-headless"; fi \
+    && if [ "$NO_PYTHON" != "true" ]; then packages="$packages python3 python3-pip python3-venv python-is-python3"; fi \
+    && apt-get install -y --no-install-recommends $packages \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -u 10001 appuser \

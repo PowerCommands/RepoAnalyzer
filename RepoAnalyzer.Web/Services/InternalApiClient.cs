@@ -9,6 +9,7 @@ namespace RepoAnalyzer.Web.Services;
 
 public sealed class InternalApiClient
 {
+    private static readonly TimeSpan ToolchainCacheDuration = TimeSpan.FromSeconds(30);
     private readonly ConnectionService _connectionService;
     private readonly ConnectionValidationService _connectionValidationService;
     private readonly RepositorySyncService _repositorySyncService;
@@ -19,10 +20,12 @@ public sealed class InternalApiClient
     private readonly BackupService _backupService;
     private readonly SafeCliRunner _safeCliRunner;
     private readonly SbomService _sbomService;
-    private readonly IFeedImportService _feedImportService;
+    private readonly FeedImportServiceResolver _feedImportResolver;
     private readonly IFeedAdministrationService _feedAdministrationService;
     private readonly IFeedScannerService _feedScannerService;
     private readonly IConfiguration _configuration;
+    private ToolchainVersionsResponse? _cachedToolchainVersions;
+    private DateTimeOffset _toolchainVersionsCachedAtUtc;
 
     public InternalApiClient(
         ConnectionService connectionService,
@@ -35,7 +38,7 @@ public sealed class InternalApiClient
         BackupService backupService,
         SafeCliRunner safeCliRunner,
         SbomService sbomService,
-        IFeedImportService feedImportService,
+        FeedImportServiceResolver feedImportResolver,
         IFeedAdministrationService feedAdministrationService,
         IFeedScannerService feedScannerService,
         IConfiguration configuration)
@@ -50,7 +53,7 @@ public sealed class InternalApiClient
         _backupService = backupService;
         _safeCliRunner = safeCliRunner;
         _sbomService = sbomService;
-        _feedImportService = feedImportService;
+        _feedImportResolver = feedImportResolver;
         _feedAdministrationService = feedAdministrationService;
         _feedScannerService = feedScannerService;
         _configuration = configuration;
@@ -118,17 +121,29 @@ public sealed class InternalApiClient
     public async Task<List<Component>> GetComponentsAsync(string? nameFilter, string? repositoryId, int? take = null, CancellationToken ct = default)
         => await _queryService.GetLatestComponentsAsync(nameFilter, repositoryId, take, ct);
 
-    public async Task<NuGetFeedVersionsResponse> GetNuGetFeedVersionsAsync(string packageId, CancellationToken ct = default)
-        => await _feedImportService.GetAvailableVersionsAsync(packageId, ct);
+    public async Task<FeedPackageVersionsResponse> GetFeedVersionsAsync(FeedType feedType, string packageId, CancellationToken ct = default)
+    {
+        await EnsureFeedTypeAvailableAsync(feedType, ct);
+        return await _feedImportResolver.GetRequired(feedType).GetAvailableVersionsAsync(packageId, ct);
+    }
 
-    public async Task<FeedPackageView> ImportNuGetPackageAsync(NuGetFeedImportRequest request, CancellationToken ct = default)
-        => await _feedImportService.ImportAsync(request, ct);
+    public async Task<FeedPackageView> ImportFeedPackageAsync(FeedPackageImportRequest request, CancellationToken ct = default)
+    {
+        await EnsureFeedTypeAvailableAsync(request.FeedType, ct);
+        return await _feedImportResolver.GetRequired(request.FeedType).ImportAsync(request, ct);
+    }
 
     public async Task<List<FeedPackageView>> GetFeedPackagesAsync(FeedType feedType, CancellationToken ct = default)
-        => await _feedAdministrationService.GetPackagesAsync(feedType, ct);
+    {
+        await EnsureFeedTypeAvailableAsync(feedType, ct);
+        return await _feedAdministrationService.GetPackagesAsync(feedType, ct);
+    }
 
-    public async Task<List<string>> GetHostedNuGetVersionsAsync(string packageId, CancellationToken ct = default)
-        => await _feedAdministrationService.GetHostedNuGetVersionsAsync(packageId, ct);
+    public async Task<List<string>> GetHostedFeedVersionsAsync(FeedType feedType, string packageId, CancellationToken ct = default)
+    {
+        await EnsureFeedTypeAvailableAsync(feedType, ct);
+        return await _feedAdministrationService.GetHostedVersionsAsync(feedType, packageId, ct);
+    }
 
     public async Task<FeedPackageView> ScanFeedPackageVulnerabilitiesAsync(string id, CancellationToken ct = default)
         => await _feedScannerService.ScanVulnerabilitiesAsync(id, ct);
@@ -137,7 +152,10 @@ public sealed class InternalApiClient
         => await _feedScannerService.CheckOutdatedAsync(id, ct);
 
     public async Task<List<FeedPackageView>> ScanAllFeedPackagesAsync(FeedType feedType, CancellationToken ct = default)
-        => await _feedScannerService.ScanAllAsync(feedType, ct);
+    {
+        await EnsureFeedTypeAvailableAsync(feedType, ct);
+        return await _feedScannerService.ScanAllAsync(feedType, ct);
+    }
 
     public async Task<FeedPackageView> UpdateFeedPackageAsync(string id, FeedPackageUpdateRequest request, CancellationToken ct = default)
         => await _feedAdministrationService.UpdatePackageAsync(id, request.TargetVersion, request.KeepOldVersion, ct);
@@ -221,7 +239,9 @@ public sealed class InternalApiClient
             .Sum(file => file.Exists ? file.Length : 0L);
         var feedRoot = Path.Combine(dataPath, "feeds");
         Directory.CreateDirectory(feedRoot);
-        var feedFiles = Directory.GetFiles(feedRoot, "*.nupkg", SearchOption.AllDirectories).ToList();
+        var feedFiles = Directory.GetFiles(feedRoot, "*", SearchOption.AllDirectories)
+            .Where(File.Exists)
+            .ToList();
         var feedBytes = feedFiles
             .Select(path => new FileInfo(path))
             .Sum(file => file.Exists ? file.Length : 0L);
@@ -240,6 +260,12 @@ public sealed class InternalApiClient
 
     public async Task<ToolchainVersionsResponse> GetToolchainVersionsAsync(CancellationToken ct = default)
     {
+        if (_cachedToolchainVersions is not null &&
+            DateTimeOffset.UtcNow - _toolchainVersionsCachedAtUtc < ToolchainCacheDuration)
+        {
+            return _cachedToolchainVersions;
+        }
+
         var dotnetSdkVersion = await RunVersionCommandAsync("dotnet", ["--version"], TimeSpan.FromSeconds(10), ct);
         var nugetVersionRaw = await RunVersionCommandAsync("dotnet", ["nuget", "--version"], TimeSpan.FromSeconds(10), ct);
         var nodeVersion = await RunVersionCommandAsync("npm", ["-v"], TimeSpan.FromSeconds(10), ct);
@@ -252,7 +278,7 @@ public sealed class InternalApiClient
         var hasMaven = IsAvailable(mavenVersionRaw);
         var hasPython = IsAvailable(pythonVersion);
 
-        return new ToolchainVersionsResponse
+        _cachedToolchainVersions = new ToolchainVersionsResponse
         {
             DotNetSdkVersion = dotnetSdkVersion,
             NuGetVersion = ExtractLastNonEmptyLine(nugetVersionRaw),
@@ -260,6 +286,10 @@ public sealed class InternalApiClient
             MavenVersion = ExtractFirstNonEmptyLine(mavenVersionRaw),
             PythonVersion = pythonVersion,
             PipVersion = pipVersion,
+            NuGetAvailable = hasDotNet && IsAvailable(ExtractLastNonEmptyLine(nugetVersionRaw)),
+            NpmAvailable = hasNpm,
+            MavenAvailable = hasMaven,
+            PythonAvailable = hasPython && IsAvailable(pipVersion),
             NuGetScannerTool = hasDotNet
                 ? "dotnet list <project.csproj> package --vulnerable --include-transitive --format json + --outdated --include-transitive --format json"
                 : "Unavailable (dotnet not found)",
@@ -273,6 +303,50 @@ public sealed class InternalApiClient
                 ? "python3 -m pip list --outdated --format=json + python3 -m pip_audit -r requirements.txt --format json"
                 : "Unavailable (python3 not found)"
         };
+        _toolchainVersionsCachedAtUtc = DateTimeOffset.UtcNow;
+        return _cachedToolchainVersions;
+    }
+
+    public async Task<List<FeedType>> GetAvailableFeedTypesAsync(CancellationToken ct = default)
+    {
+        var toolchain = await GetToolchainVersionsAsync(ct);
+        var result = new List<FeedType>();
+        if (toolchain.NuGetAvailable)
+        {
+            result.Add(FeedType.NuGet);
+        }
+        if (toolchain.NpmAvailable)
+        {
+            result.Add(FeedType.Npm);
+        }
+        if (toolchain.PythonAvailable)
+        {
+            result.Add(FeedType.Python);
+        }
+        if (toolchain.MavenAvailable)
+        {
+            result.Add(FeedType.Maven);
+        }
+
+        return result;
+    }
+
+    private async Task EnsureFeedTypeAvailableAsync(FeedType feedType, CancellationToken ct)
+    {
+        var toolchain = await GetToolchainVersionsAsync(ct);
+        var available = feedType switch
+        {
+            FeedType.NuGet => toolchain.NuGetAvailable,
+            FeedType.Npm => toolchain.NpmAvailable,
+            FeedType.Python => toolchain.PythonAvailable,
+            FeedType.Maven => toolchain.MavenAvailable,
+            _ => false
+        };
+
+        if (!available)
+        {
+            throw new InvalidOperationException($"Feed type '{feedType}' is not available in the current runtime.");
+        }
     }
 
     private async Task<string> RunVersionCommandAsync(
@@ -343,6 +417,10 @@ public sealed class InternalApiClient
         public string MavenVersion { get; set; } = "Unavailable";
         public string PythonVersion { get; set; } = "Unavailable";
         public string PipVersion { get; set; } = "Unavailable";
+        public bool NuGetAvailable { get; set; }
+        public bool NpmAvailable { get; set; }
+        public bool MavenAvailable { get; set; }
+        public bool PythonAvailable { get; set; }
         public string NuGetScannerTool { get; set; } = "Unavailable";
         public string NpmScannerTool { get; set; } = "Unavailable";
         public string MavenScannerTool { get; set; } = "Unavailable";

@@ -19,6 +19,19 @@ docker build -t repo-analyzer:local .
 docker run --rm -p 8080:8080 -v repo-analyzer-data:/app/data repo-analyzer:local
 ```
 
+Optional runtime variants:
+
+```bash
+# No Maven/Java
+docker build -t repo-analyzer:local --build-arg NO_MAVEN=true .
+
+# No Python/pip
+docker build -t repo-analyzer:local --build-arg NO_PYTHON=true .
+
+# No Maven/Java and no Python/pip
+docker build -t repo-analyzer:local --build-arg NO_MAVEN=true --build-arg NO_PYTHON=true .
+```
+
 ## Publish Docker container with Dockube 
 
 ```bash

@@ -289,11 +289,11 @@
                     </details>
                 </MudTd>
                 <MudTd>
-                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
-                        <img src="@EcosystemIconPath(context.Ecosystem)" alt="@context.Ecosystem icon" class="ecosystem-icon" />
-                        <span>@context.Ecosystem</span>
-                    </MudStack>
-                </MudTd>
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                    <img src="@EcosystemIconPath(context.Ecosystem)" alt="@context.Ecosystem icon" class="ecosystem-icon" />
+                    <span>@context.Ecosystem</span>
+                </MudStack>
+            </MudTd>
                 <MudTd>@context.StatusLabel</MudTd>
                 <MudTd>@context.Name</MudTd>
                 <MudTd>@context.InstalledVersion</MudTd>
@@ -303,9 +303,12 @@
                 </MudTd>
                 <MudTd>@context.RepositoryName</MudTd>
                 <MudTd>
-                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Secondary" OnClick="() => OpenFeedImportDialogForComponentAsync(context)">
-                        Add to local Feed
-                    </MudButton>
+                    @if (CanAddComponentToFeed(context.Ecosystem))
+                    {
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Secondary" OnClick="() => OpenFeedImportDialogForComponentAsync(context)">
+                            Add to local Feed
+                        </MudButton>
+                    }
                 </MudTd>
             </RowTemplate>
             <PagerContent>
@@ -318,9 +321,12 @@
             <MudPaper Class="pa-3 mt-3">
                 <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
                     <MudText Typo="Typo.subtitle1">@($"{SelectedComponentRow.Name} ({SelectedComponentRow.InstalledVersion})")</MudText>
-                    <MudButton Variant="Variant.Filled" Color="Color.Secondary" OnClick="() => OpenFeedImportDialogForComponentAsync(SelectedComponentRow)">
-                        Add to local Feed
-                    </MudButton>
+                    @if (CanAddComponentToFeed(SelectedComponentRow.Ecosystem))
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Secondary" OnClick="() => OpenFeedImportDialogForComponentAsync(SelectedComponentRow)">
+                            Add to local Feed
+                        </MudButton>
+                    }
                 </MudStack>
                 <MudText Typo="Typo.caption">Ecosystem: @SelectedComponentRow.Ecosystem | Status: @SelectedComponentRow.StatusLabel | Fixed: @SelectedComponentRow.FixedVersion</MudText>
                 <MudText Typo="Typo.caption">Repository: @SelectedComponentRow.RepositoryName | Project: @ProjectName(SelectedComponentRow.ProjectId)</MudText>
@@ -879,59 +885,71 @@
     </MudTabPanel>
 
     <MudTabPanel Text="Feeds">
-        <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
-            <MudText Typo="Typo.h6">Feeds</MudText>
-            <MudStack Row="true" Spacing="1">
-                <MudButton Variant="Variant.Outlined" Color="Color.Info" Disabled="@(FeedPackages.Count == 0 || FeedScanBusy)" OnClick="ScanAllFeedPackagesAsync">Scan components</MudButton>
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="OpenFeedImportDialogAsync">Import package</MudButton>
-            </MudStack>
-        </MudStack>
-
-        <MudGrid Class="mt-2">
-            <MudItem xs="12" md="4">
-                <MudSelect T="FeedType" Value="SelectedFeedType" ValueChanged="OnFeedTypeChanged" Label="Feed type" Variant="Variant.Outlined">
-                    <MudSelectItem Value="@FeedType.NuGet">NuGet</MudSelectItem>
-                </MudSelect>
-            </MudItem>
-        </MudGrid>
-
-        <MudPaper Class="pa-3 mt-3">
-            <MudText Typo="Typo.subtitle2">Feed URL</MudText>
-            <MudText Typo="Typo.caption">Use this URL in Visual Studio or another NuGet client to add the selected feed source.</MudText>
-            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mt-2">
-                <MudTextField T="string" Value="@SelectedFeedSourceUrl" ReadOnly="true" Variant="Variant.Outlined" FullWidth="true" />
-                <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Color="Color.Primary" OnClick="CopySelectedFeedSourceUrlAsync" />
-            </MudStack>
-        </MudPaper>
-
-        <MudGrid Class="mt-3">
-            <MudItem xs="12" md="4">
-                <MudPaper Class="pa-3">
-                    <MudText Typo="Typo.caption">NuGet packages</MudText>
-                    <MudText Typo="Typo.h5">@NuGetFeedPackageCount</MudText>
-                </MudPaper>
-            </MudItem>
-            <MudItem xs="12" md="4">
-                <MudPaper Class="pa-3">
-                    <MudText Typo="Typo.caption">Selected feed packages</MudText>
-                    <MudText Typo="Typo.h5">@FeedPackages.Count</MudText>
-                </MudPaper>
-            </MudItem>
-            <MudItem xs="12" md="4">
-                <MudPaper Class="pa-3">
-                    <MudText Typo="Typo.caption">Packages on disk</MudText>
-                    <MudText Typo="Typo.h5">@FeedStorageSizeDisplay</MudText>
-                </MudPaper>
-            </MudItem>
-        </MudGrid>
-
-        @if (FeedScanBusy)
+        @if (AvailableFeedTypes.Count == 0)
         {
-            <MudProgressLinear Class="mt-3" Color="Color.Info" Indeterminate="true" />
-            <MudText Typo="Typo.caption" Class="mt-1">Scanning all hosted packages in the selected feed.</MudText>
+            <MudAlert Severity="Severity.Info" Dense="true">No supported feed distributions are installed in the current runtime.</MudAlert>
         }
+        else
+        {
+            <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                <MudText Typo="Typo.h6">Feeds</MudText>
+                <MudStack Row="true" Spacing="1">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Info" Disabled="@(FeedPackages.Count == 0 || FeedScanBusy)" OnClick="ScanAllFeedPackagesAsync">Scan components</MudButton>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="OpenFeedImportDialogAsync">Import package</MudButton>
+                </MudStack>
+            </MudStack>
 
-        <MudTable T="FeedPackageView" Items="FeedPackages" Dense="true" Hover="true" Class="mt-3">
+            <MudGrid Class="mt-2">
+                <MudItem xs="12" md="4">
+                    <MudSelect T="FeedType" Value="SelectedFeedType" ValueChanged="OnFeedTypeChanged" Label="Feed type" Variant="Variant.Outlined">
+                        @foreach (var feedType in AvailableFeedTypes)
+                        {
+                            <MudSelectItem Value="@feedType">@FeedTypeLabel(feedType)</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" md="8">
+                    <MudTextField @bind-Value="FeedBaseUrl" Label="Feed base URL" Variant="Variant.Outlined" />
+                </MudItem>
+            </MudGrid>
+
+            <MudPaper Class="pa-3 mt-3">
+                <MudText Typo="Typo.subtitle2">Feed URL</MudText>
+                <MudText Typo="Typo.caption">@SelectedFeedSourceHelpText</MudText>
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mt-2">
+                    <MudTextField T="string" Value="@SelectedFeedSourceUrl" ReadOnly="true" Variant="Variant.Outlined" FullWidth="true" />
+                    <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Color="Color.Primary" OnClick="CopySelectedFeedSourceUrlAsync" />
+                </MudStack>
+            </MudPaper>
+
+            <MudGrid Class="mt-3">
+                <MudItem xs="12" md="4">
+                    <MudPaper Class="pa-3">
+                        <MudText Typo="Typo.caption">Total hosted packages</MudText>
+                        <MudText Typo="Typo.h5">@TotalFeedPackageCount</MudText>
+                    </MudPaper>
+                </MudItem>
+                <MudItem xs="12" md="4">
+                    <MudPaper Class="pa-3">
+                        <MudText Typo="Typo.caption">Selected feed packages</MudText>
+                        <MudText Typo="Typo.h5">@FeedPackages.Count</MudText>
+                    </MudPaper>
+                </MudItem>
+                <MudItem xs="12" md="4">
+                    <MudPaper Class="pa-3">
+                        <MudText Typo="Typo.caption">Packages on disk</MudText>
+                        <MudText Typo="Typo.h5">@FeedStorageSizeDisplay</MudText>
+                    </MudPaper>
+                </MudItem>
+            </MudGrid>
+
+            @if (FeedScanBusy)
+            {
+                <MudProgressLinear Class="mt-3" Color="Color.Info" Indeterminate="true" />
+                <MudText Typo="Typo.caption" Class="mt-1">Scanning all hosted packages in the selected feed.</MudText>
+            }
+
+            <MudTable T="FeedPackageView" Items="FeedPackages" Dense="true" Hover="true" Class="mt-3">
             <HeaderContent>
                 <MudTh></MudTh>
                 <MudTh>Package ID</MudTh>
@@ -1007,7 +1025,8 @@
             <NoRecordsContent>
                 <MudText Typo="Typo.caption">No packages are hosted in the selected feed yet.</MudText>
             </NoRecordsContent>
-        </MudTable>
+            </MudTable>
+        }
     </MudTabPanel>
 
     <MudTabPanel Text="Tools">
@@ -1204,13 +1223,14 @@
     private string AppName => Configuration["App:Name"] ?? "Repo Analyzer";
     private string AppVersion => Configuration["App:Version"] ?? "1.0.0";
 
-    private readonly List<DistributionInfo> SupportedDistributions =
+    private readonly List<DistributionInfo> AllDistributions =
     [
-        new() { Name = "NuGet", IconPath = "/images/nuget.png", RuntimeVersion = "Loading...", ScannerTool = "dotnet list package" },
-        new() { Name = "NPM", IconPath = "/images/npm.png", RuntimeVersion = "Loading...", ScannerTool = "npm audit + npm outdated" },
-        new() { Name = "Maven", IconPath = "/images/maven.png", RuntimeVersion = "Loading...", ScannerTool = "maven-versions + owasp-dependency-check" },
-        new() { Name = "PyPI (pip)", IconPath = "/images/pip.png", RuntimeVersion = "Loading...", ScannerTool = "pip list + pip-audit" }
+        new() { FeedType = FeedType.NuGet, Name = "NuGet", IconPath = "/images/nuget.png", RuntimeVersion = "Loading...", ScannerTool = "dotnet list package" },
+        new() { FeedType = FeedType.Npm, Name = "NPM", IconPath = "/images/npm.png", RuntimeVersion = "Loading...", ScannerTool = "npm audit + npm outdated" },
+        new() { FeedType = FeedType.Maven, Name = "Maven", IconPath = "/images/maven.png", RuntimeVersion = "Loading...", ScannerTool = "maven-versions + owasp-dependency-check" },
+        new() { FeedType = FeedType.Python, Name = "PyPI (pip)", IconPath = "/images/pip.png", RuntimeVersion = "Loading...", ScannerTool = "pip list + pip-audit" }
     ];
+    private List<DistributionInfo> SupportedDistributions = new();
 
     private string? Error;
     private string? InfoMessage;
@@ -1277,6 +1297,8 @@
     private List<ComponentLocationRow> SelectedComponentLocations = new();
     private List<TransitiveDependencyRow> SelectedComponentTransitiveRows = new();
     private FeedType SelectedFeedType = FeedType.NuGet;
+    private string _feedBaseUrl = "http://localhost:8080";
+    private List<FeedType> AvailableFeedTypes = new();
     private List<FeedPackageView> FeedPackages = new();
     private string? ExpandedFeedPackageId;
     private bool FeedScanBusy;
@@ -1310,7 +1332,7 @@
     private long DashboardStoredTotalBytes;
     private string DashboardStoredSizeMbDisplay => (DashboardStoredTotalBytes / (1024d * 1024d)).ToString("0.00");
     private int DashboardFeedPackageCount => DataStorageStats.FeedFileCount;
-    private int NuGetFeedPackageCount => DataStorageStats.FeedFileCount;
+    private int TotalFeedPackageCount => DataStorageStats.FeedFileCount;
     private string FeedStorageSizeDisplay => FormatFileSize(DataStorageStats.TotalFeedBytes);
     private DataStorageStatsResponse DataStorageStats = new();
 
@@ -1354,10 +1376,32 @@
         !string.IsNullOrWhiteSpace(SbomOutputType) &&
         !string.IsNullOrWhiteSpace(SbomFormat);
 
+    private string FeedBaseUrl
+    {
+        get => _feedBaseUrl;
+        set
+        {
+            _feedBaseUrl = NormalizeFeedBaseUrl(value);
+            _ = Js.InvokeVoidAsync("localStorage.setItem", "repoanalyzer.feeds.baseurl", _feedBaseUrl);
+        }
+    }
+
     private string SelectedFeedSourceUrl => SelectedFeedType switch
     {
-        FeedType.NuGet => $"{Navigation.BaseUri.TrimEnd('/')}/feeds/nuget/v3/index.json",
-        _ => Navigation.BaseUri.TrimEnd('/')
+        FeedType.NuGet => BuildFeedUrl("/feeds/nuget/v3/index.json"),
+        FeedType.Npm => BuildFeedUrl("/feeds/npm/"),
+        FeedType.Python => BuildFeedUrl("/feeds/pypi/simple"),
+        FeedType.Maven => BuildFeedUrl("/feeds/maven"),
+        _ => FeedBaseUrl
+    };
+
+    private string SelectedFeedSourceHelpText => SelectedFeedType switch
+    {
+        FeedType.NuGet => "Use this URL in Visual Studio or another NuGet client to add the selected feed source.",
+        FeedType.Npm => "Use this URL as the npm registry, for example with npm config set registry <url>.",
+        FeedType.Python => "Use this URL as your Python package index, for example with pip install --index-url <url> <package>.",
+        FeedType.Maven => "Use this URL as a Maven repository URL in your pom.xml or settings.xml.",
+        _ => "Use this URL with the selected feed client."
     };
 
     private string BatchSummaryText =>
@@ -1406,6 +1450,9 @@
             {
                 _findingsRowsPerPage = findingsRows;
             }
+
+            var feedBaseUrlPref = await Js.InvokeAsync<string?>("localStorage.getItem", "repoanalyzer.feeds.baseurl");
+            _feedBaseUrl = NormalizeFeedBaseUrl(feedBaseUrlPref);
 
             StateHasChanged();
         }
@@ -1514,25 +1561,42 @@
     private async Task RefreshSupportedDistributionsAsync()
     {
         var toolVersions = await Api.GetToolchainVersionsAsync();
-
-        foreach (var distro in SupportedDistributions)
-        {
-            (distro.RuntimeVersion, distro.ScannerTool) = distro.Name switch
+        AvailableFeedTypes = await Api.GetAvailableFeedTypesAsync();
+        SupportedDistributions = AllDistributions
+            .Where(x => x.FeedType is not null && AvailableFeedTypes.Contains(x.FeedType.Value))
+            .Select(distro =>
             {
-                "NuGet" => (
-                    $"NuGet {toolVersions.NuGetVersion} / .NET SDK {toolVersions.DotNetSdkVersion}",
-                    toolVersions.NuGetScannerTool),
-                "NPM" => (
-                    $"npm {toolVersions.NodeVersion}",
-                    toolVersions.NpmScannerTool),
-                "Maven" => (
-                    toolVersions.MavenVersion,
-                    toolVersions.MavenScannerTool),
-                "PyPI (pip)" => (
-                    $"{toolVersions.PythonVersion} / {toolVersions.PipVersion}",
-                    toolVersions.PythonScannerTool),
-                _ => (distro.RuntimeVersion, distro.ScannerTool)
-            };
+                var clone = new DistributionInfo
+                {
+                    FeedType = distro.FeedType,
+                    Name = distro.Name,
+                    IconPath = distro.IconPath
+                };
+
+                (clone.RuntimeVersion, clone.ScannerTool) = clone.Name switch
+                {
+                    "NuGet" => (
+                        $"NuGet {toolVersions.NuGetVersion} / .NET SDK {toolVersions.DotNetSdkVersion}",
+                        toolVersions.NuGetScannerTool),
+                    "NPM" => (
+                        $"npm {toolVersions.NodeVersion}",
+                        toolVersions.NpmScannerTool),
+                    "Maven" => (
+                        toolVersions.MavenVersion,
+                        toolVersions.MavenScannerTool),
+                    "PyPI (pip)" => (
+                        $"{toolVersions.PythonVersion} / {toolVersions.PipVersion}",
+                        toolVersions.PythonScannerTool),
+                    _ => (distro.RuntimeVersion, distro.ScannerTool)
+                };
+
+                return clone;
+            })
+            .ToList();
+
+        if (AvailableFeedTypes.Count > 0 && !AvailableFeedTypes.Contains(SelectedFeedType))
+        {
+            SelectedFeedType = AvailableFeedTypes[0];
         }
     }
 
@@ -1973,6 +2037,13 @@
 
     private async Task ReloadFeedPackagesAsync()
     {
+        if (!AvailableFeedTypes.Contains(SelectedFeedType))
+        {
+            FeedPackages = new List<FeedPackageView>();
+            ExpandedFeedPackageId = null;
+            return;
+        }
+
         FeedPackages = await Api.GetFeedPackagesAsync(SelectedFeedType);
         if (!string.IsNullOrWhiteSpace(ExpandedFeedPackageId) && FeedPackages.All(x => !string.Equals(x.Id, ExpandedFeedPackageId, StringComparison.Ordinal)))
         {
@@ -1982,6 +2053,11 @@
 
     private async Task OnFeedTypeChanged(FeedType value)
     {
+        if (!AvailableFeedTypes.Contains(value))
+        {
+            return;
+        }
+
         SelectedFeedType = value;
         ExpandedFeedPackageId = null;
         await ReloadFeedPackagesAsync();
@@ -1993,10 +2069,34 @@
         InfoMessage = "Feed URL copied to clipboard.";
     }
 
+    private string BuildFeedUrl(string relativePath)
+        => $"{NormalizeFeedBaseUrl(FeedBaseUrl)}{relativePath}";
+
+    private static string NormalizeFeedBaseUrl(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "http://localhost:8080";
+        }
+
+        return value.Trim().TrimEnd('/');
+    }
+
     private async Task OpenFeedImportDialogAsync()
     {
+        if (!AvailableFeedTypes.Contains(SelectedFeedType))
+        {
+            Error = "Selected feed type is not available in the current runtime.";
+            return;
+        }
+
         var dialog = await DialogService.ShowAsync<FeedImportDialog>(
             "Import package",
+            new DialogParameters<FeedImportDialog>
+            {
+                { x => x.DefaultFeedType, SelectedFeedType },
+                { x => x.AvailableFeedTypes, AvailableFeedTypes }
+            },
             new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseOnEscapeKey = true });
         var result = await dialog.Result;
         if (result is null || result.Canceled)
@@ -2015,8 +2115,16 @@
 
     private async Task OpenFeedImportDialogForComponentAsync(ComponentRow row)
     {
+        if (!TryGetSupportedFeedType(row.Ecosystem, out var feedType))
+        {
+            Error = $"Components in ecosystem '{row.Ecosystem}' do not support local feeds yet.";
+            return;
+        }
+
         var parameters = new DialogParameters<FeedImportDialog>
         {
+            { x => x.DefaultFeedType, feedType },
+            { x => x.AvailableFeedTypes, AvailableFeedTypes },
             { x => x.DefaultPackageId, row.Name },
             { x => x.DefaultVersion, row.InstalledVersion },
             { x => x.UseCurrentVersionByDefault, string.Equals(row.Status, "OK", StringComparison.OrdinalIgnoreCase) }
@@ -2097,6 +2205,7 @@
             { x => x.FeedPackageId, package.Id },
             { x => x.PackageId, package.PackageId },
             { x => x.CurrentVersion, package.Version },
+            { x => x.FeedType, Enum.Parse<FeedType>(package.FeedType, ignoreCase: true) },
             { x => x.SuggestedVersion, package.LatestKnownVersion }
         };
 
@@ -3331,6 +3440,50 @@
         return "/images/nodejs.png";
     }
 
+    private static bool TryGetSupportedFeedType(string ecosystem, out FeedType feedType)
+    {
+        if (ecosystem.Equals("NuGet", StringComparison.OrdinalIgnoreCase))
+        {
+            feedType = FeedType.NuGet;
+            return true;
+        }
+
+        if (ecosystem.Equals("npm", StringComparison.OrdinalIgnoreCase))
+        {
+            feedType = FeedType.Npm;
+            return true;
+        }
+
+        if (ecosystem.Equals("python", StringComparison.OrdinalIgnoreCase) ||
+            ecosystem.Contains("pip", StringComparison.OrdinalIgnoreCase))
+        {
+            feedType = FeedType.Python;
+            return true;
+        }
+
+        if (ecosystem.Equals("maven", StringComparison.OrdinalIgnoreCase))
+        {
+            feedType = FeedType.Maven;
+            return true;
+        }
+
+        feedType = FeedType.NuGet;
+        return false;
+    }
+
+    private bool CanAddComponentToFeed(string ecosystem)
+        => TryGetSupportedFeedType(ecosystem, out var feedType) && AvailableFeedTypes.Contains(feedType);
+
+    private static string FeedTypeLabel(FeedType feedType)
+        => feedType switch
+        {
+            FeedType.NuGet => "NuGet",
+            FeedType.Npm => "NPM",
+            FeedType.Python => "Python",
+            FeedType.Maven => "Maven",
+            _ => feedType.ToString()
+        };
+
     private static string ProjectIconPath(DetectedProject project)
     {
         var projectType = project.ProjectType ?? string.Empty;
@@ -3537,6 +3690,7 @@
 
     private sealed class DistributionInfo
     {
+        public FeedType? FeedType { get; set; }
         public string Name { get; set; } = string.Empty;
         public string IconPath { get; set; } = string.Empty;
         public string RuntimeVersion { get; set; } = string.Empty;

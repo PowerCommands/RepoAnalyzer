@@ -1,7 +1,7 @@
+using System.Formats.Tar;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
-using System.Xml.Linq;
 using RepoAnalyzer.Web.Dto;
 using RepoAnalyzer.Web.Models;
 using RepoAnalyzer.Web.Models.Enums;
@@ -9,44 +9,39 @@ using RepoAnalyzer.Web.Services.Analysis.Logging;
 
 namespace RepoAnalyzer.Web.Services.Feeds;
 
-public sealed class NuGetFeedImportService : IFeedImportService
+public sealed class NpmFeedImportService : IFeedImportService
 {
     private readonly AppDataService _data;
-    private readonly NuGetPackageSourceClient _nugetClient;
+    private readonly NpmPackageSourceClient _npmClient;
     private readonly FeedStoragePathService _pathService;
-    private readonly ILogger<NuGetFeedImportService> _logger;
+    private readonly ILogger<NpmFeedImportService> _logger;
     private readonly IAnalysisLog _analysisLog;
 
-    public NuGetFeedImportService(
+    public NpmFeedImportService(
         AppDataService data,
-        NuGetPackageSourceClient nugetClient,
+        NpmPackageSourceClient npmClient,
         FeedStoragePathService pathService,
-        ILogger<NuGetFeedImportService> logger,
+        ILogger<NpmFeedImportService> logger,
         IAnalysisLog analysisLog)
     {
         _data = data;
-        _nugetClient = nugetClient;
+        _npmClient = npmClient;
         _pathService = pathService;
         _logger = logger;
         _analysisLog = analysisLog;
     }
 
-    public FeedType FeedType => FeedType.NuGet;
+    public FeedType FeedType => FeedType.Npm;
 
     public async Task<FeedPackageVersionsResponse> GetAvailableVersionsAsync(string packageId, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(packageId))
-        {
-            throw new InvalidOperationException("Package ID is required.");
-        }
-
-        var versions = await _nugetClient.GetVersionsAsync(packageId, ct);
+        var document = await _npmClient.GetPackageDocumentAsync(packageId, ct);
         return new FeedPackageVersionsResponse
         {
-            FeedType = FeedType.NuGet,
-            PackageId = packageId.Trim(),
-            LatestVersion = versions.LastOrDefault(),
-            Versions = versions
+            FeedType = FeedType.Npm,
+            PackageId = document.PackageId,
+            LatestVersion = document.LatestVersion,
+            Versions = document.Versions.Keys.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList()
         };
     }
 
@@ -62,16 +57,16 @@ public sealed class NuGetFeedImportService : IFeedImportService
             throw new InvalidOperationException("Package version is required.");
         }
 
-        var normalizedPackageId = NuGetPackageSourceClient.NormalizePackageId(request.PackageId);
-        var version = request.Version.Trim();
+        var normalizedPackageId = NpmPackageSourceClient.NormalizePackageId(request.PackageId);
+        var requestedVersion = request.Version.Trim();
         var packages = await _data.GetFeedPackagesAsync(ct);
         var links = await _data.GetComponentFeedPackageLinksAsync(ct);
         var logContext = CreateLogContext();
 
         var existing = packages.FirstOrDefault(x =>
-            x.FeedType == FeedType.NuGet &&
+            x.FeedType == FeedType.Npm &&
             string.Equals(x.NormalizedPackageId, normalizedPackageId, StringComparison.Ordinal) &&
-            string.Equals(x.Version, version, StringComparison.OrdinalIgnoreCase));
+            string.Equals(x.Version, requestedVersion, StringComparison.OrdinalIgnoreCase));
 
         if (existing is not null)
         {
@@ -86,11 +81,6 @@ public sealed class NuGetFeedImportService : IFeedImportService
                     ["feedType"] = existing.FeedType.ToString()
                 },
                 ct);
-            _logger.LogInformation(
-                "Component already exist in feed, download skipped. PackageId={PackageId}, Version={Version}, FeedType={FeedType}",
-                existing.PackageId,
-                existing.Version,
-                existing.FeedType);
             await EnsureComponentLinkAsync(existing.Id, request.ComponentId, links, ct);
             var refreshedLinks = await _data.GetComponentFeedPackageLinksAsync(ct);
             return FeedPackageMapper.ToView(existing, refreshedLinks);
@@ -100,24 +90,26 @@ public sealed class NuGetFeedImportService : IFeedImportService
         {
             await _analysisLog.InfoAsync(
                 "FeedImportStart",
-                "Starting NuGet package download for feed import.",
+                "Starting npm package download for feed import.",
                 logContext,
                 new Dictionary<string, object?>
                 {
                     ["packageId"] = request.PackageId,
-                    ["version"] = version,
-                    ["feedType"] = FeedType.NuGet.ToString()
+                    ["version"] = requestedVersion,
+                    ["feedType"] = FeedType.Npm.ToString()
                 },
                 ct);
-            _logger.LogInformation(
-                "Starting NuGet package download for feed import. PackageId={PackageId}, Version={Version}",
-                request.PackageId,
-                version);
 
-            var packageBytes = await _nugetClient.DownloadPackageAsync(request.PackageId, version, ct);
-            var metadata = ReadMetadata(packageBytes);
+            var document = await _npmClient.GetPackageDocumentAsync(request.PackageId, ct);
+            if (!document.Versions.TryGetValue(requestedVersion, out var versionDocument))
+            {
+                throw new InvalidOperationException($"Version '{requestedVersion}' was not found for npm package '{request.PackageId}'.");
+            }
+
+            var packageBytes = await _npmClient.DownloadTarballAsync(versionDocument.TarballUrl ?? string.Empty, ct);
+            var metadata = ReadMetadata(packageBytes, versionDocument);
             var sha256 = Convert.ToHexString(SHA256.HashData(packageBytes)).ToLowerInvariant();
-            var filePath = _pathService.GetPackageFilePath(FeedType.NuGet, normalizedPackageId, metadata.Version);
+            var filePath = _pathService.GetPackageFilePath(FeedType.Npm, metadata.NormalizedPackageId, metadata.Version);
 
             var fileDirectory = Path.GetDirectoryName(filePath);
             if (!string.IsNullOrWhiteSpace(fileDirectory))
@@ -129,9 +121,9 @@ public sealed class NuGetFeedImportService : IFeedImportService
 
             var package = new FeedPackage
             {
-                FeedType = FeedType.NuGet,
-                PackageId = metadata.Id,
-                NormalizedPackageId = NuGetPackageSourceClient.NormalizePackageId(metadata.Id),
+                FeedType = FeedType.Npm,
+                PackageId = metadata.PackageId,
+                NormalizedPackageId = metadata.NormalizedPackageId,
                 Version = metadata.Version,
                 Description = metadata.Description,
                 MetadataJson = metadata.MetadataJson,
@@ -145,7 +137,7 @@ public sealed class NuGetFeedImportService : IFeedImportService
 
             await _analysisLog.InfoAsync(
                 "FeedImportCompleted",
-                "NuGet package downloaded and stored successfully.",
+                "npm package downloaded and stored successfully.",
                 logContext,
                 new Dictionary<string, object?>
                 {
@@ -158,7 +150,7 @@ public sealed class NuGetFeedImportService : IFeedImportService
                 },
                 ct);
             _logger.LogInformation(
-                "NuGet package downloaded and stored successfully. PackageId={PackageId}, Version={Version}, Bytes={Bytes}, FilePath={FilePath}, Sha256={Sha256}",
+                "npm package downloaded and stored successfully. PackageId={PackageId}, Version={Version}, Bytes={Bytes}, FilePath={FilePath}, Sha256={Sha256}",
                 package.PackageId,
                 package.Version,
                 packageBytes.Length,
@@ -174,21 +166,21 @@ public sealed class NuGetFeedImportService : IFeedImportService
         {
             await _analysisLog.ErrorAsync(
                 "FeedImportFailed",
-                "NuGet package download failed for feed import.",
+                "npm package download failed for feed import.",
                 logContext,
                 ex,
                 new Dictionary<string, object?>
                 {
                     ["packageId"] = request.PackageId,
-                    ["version"] = version,
-                    ["feedType"] = FeedType.NuGet.ToString()
+                    ["version"] = requestedVersion,
+                    ["feedType"] = FeedType.Npm.ToString()
                 },
                 ct);
             _logger.LogError(
                 ex,
-                "NuGet package download failed for feed import. PackageId={PackageId}, Version={Version}",
+                "npm package download failed for feed import. PackageId={PackageId}, Version={Version}",
                 request.PackageId,
-                version);
+                requestedVersion);
             throw;
         }
     }
@@ -225,61 +217,67 @@ public sealed class NuGetFeedImportService : IFeedImportService
             ProviderType = "Feeds"
         };
 
-    private static NuGetMetadata ReadMetadata(byte[] packageBytes)
+    private static NpmMetadata ReadMetadata(byte[] packageBytes, NpmPackageSourceClient.PackageVersionDocument versionDocument)
     {
         using var packageStream = new MemoryStream(packageBytes, writable: false);
-        using var archive = new ZipArchive(packageStream, ZipArchiveMode.Read, leaveOpen: false);
-        var nuspecEntry = archive.Entries.FirstOrDefault(x => x.FullName.EndsWith(".nuspec", StringComparison.OrdinalIgnoreCase))
-            ?? throw new InvalidOperationException("The NuGet package does not contain a .nuspec file.");
+        using var gzipStream = new GZipStream(packageStream, CompressionMode.Decompress, leaveOpen: false);
+        using var tarReader = new TarReader(gzipStream, leaveOpen: false);
 
-        using var entryStream = nuspecEntry.Open();
-        var document = XDocument.Load(entryStream);
-        var metadataElement = document.Root?.Elements().FirstOrDefault(x => x.Name.LocalName == "metadata")
-            ?? throw new InvalidOperationException("The NuGet package .nuspec does not contain metadata.");
-
-        var id = metadataElement.Elements().FirstOrDefault(x => x.Name.LocalName == "id")?.Value?.Trim();
-        var version = metadataElement.Elements().FirstOrDefault(x => x.Name.LocalName == "version")?.Value?.Trim();
-        if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(version))
+        while (tarReader.GetNextEntry() is { } entry)
         {
-            throw new InvalidOperationException("The NuGet package .nuspec is missing id or version.");
+            if (entry.EntryType is not TarEntryType.RegularFile and not TarEntryType.V7RegularFile)
+            {
+                continue;
+            }
+
+            if (!string.Equals(entry.Name, "package/package.json", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            using var contentStream = entry.DataStream ?? throw new InvalidOperationException("The npm tarball package.json file was empty.");
+            using var document = JsonDocument.Parse(contentStream);
+            var root = document.RootElement;
+            var packageId = root.TryGetProperty("name", out var nameElement)
+                ? nameElement.GetString()
+                : versionDocument.Name;
+            var version = root.TryGetProperty("version", out var versionElement)
+                ? versionElement.GetString()
+                : versionDocument.Version;
+
+            if (string.IsNullOrWhiteSpace(packageId) || string.IsNullOrWhiteSpace(version))
+            {
+                throw new InvalidOperationException("The npm package.json file is missing name or version.");
+            }
+
+            var metadata = JsonSerializer.Deserialize<Dictionary<string, object?>>(versionDocument.MetadataJson)
+                ?? new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+
+            metadata["dist"] = new Dictionary<string, object?>
+            {
+                ["shasum"] = versionDocument.Shasum,
+                ["integrity"] = versionDocument.Integrity
+            };
+
+            return new NpmMetadata
+            {
+                PackageId = packageId,
+                NormalizedPackageId = NpmPackageSourceClient.NormalizePackageId(packageId),
+                Version = version,
+                Description = root.TryGetProperty("description", out var descriptionElement) ? descriptionElement.GetString() : versionDocument.Description,
+                MetadataJson = JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true })
+            };
         }
 
-        var description = metadataElement.Elements().FirstOrDefault(x => x.Name.LocalName == "description")?.Value?.Trim();
-        var authors = metadataElement.Elements().FirstOrDefault(x => x.Name.LocalName == "authors")?.Value?.Trim();
-        var dependencies = metadataElement
-            .Descendants()
-            .Where(x => x.Name.LocalName == "dependency")
-            .Select(x => new
-            {
-                Id = x.Attribute("id")?.Value,
-                Version = x.Attribute("version")?.Value,
-                TargetFramework = x.Parent?.Attribute("targetFramework")?.Value
-            })
-            .ToList();
-
-        var metadataJson = JsonSerializer.Serialize(new
-        {
-            id,
-            version,
-            description,
-            authors,
-            dependencies
-        }, new JsonSerializerOptions { WriteIndented = true });
-
-        return new NuGetMetadata
-        {
-            Id = id,
-            Version = version,
-            Description = description,
-            MetadataJson = metadataJson
-        };
+        throw new InvalidOperationException("The npm tarball did not contain package/package.json.");
     }
 
-    private sealed class NuGetMetadata
+    private sealed class NpmMetadata
     {
-        public string Id { get; set; } = string.Empty;
+        public string PackageId { get; set; } = string.Empty;
+        public string NormalizedPackageId { get; set; } = string.Empty;
         public string Version { get; set; } = string.Empty;
         public string? Description { get; set; }
-        public string MetadataJson { get; set; } = string.Empty;
+        public string MetadataJson { get; set; } = "{}";
     }
 }

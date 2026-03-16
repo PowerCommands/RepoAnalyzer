@@ -116,11 +116,16 @@ This is the best view when you want to answer questions such as:
 
 The **Feeds** tab is the administration area for locally hosted packages.
 
-Today it supports **NuGet**, but the design is prepared for more feed types later.
+Today it supports **NuGet**, **NPM**, **Python (PyPI)**, and **Maven**.
 
 ### Feed source URL
 
-At the top of the page you will see the feed URL that can be used in Visual Studio or another NuGet client.
+At the top of the page you will see the feed URL for the selected feed type.
+
+- For **NuGet**, use it in Visual Studio or another NuGet client.
+- For **NPM**, use it as your npm registry URL.
+- For **Python**, use it as your package index URL for pip.
+- For **Maven**, use it as your Maven repository URL.
 
 You can use the copy button to copy the URL directly to the clipboard.
 
@@ -131,7 +136,7 @@ You can import packages in two ways:
 - directly from the **Feeds** tab with **Import package**
 - from the **Components** tab with **Add to local Feed**
 
-When importing from **Components**, the dialog can help you start from the currently selected package and version.
+When importing from **Components**, the dialog starts from the selected package and chooses the matching supported feed type automatically for NuGet and npm components.
 
 ### Scan hosted packages
 

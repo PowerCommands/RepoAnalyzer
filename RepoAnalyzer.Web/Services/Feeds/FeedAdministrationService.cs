@@ -8,18 +8,18 @@ namespace RepoAnalyzer.Web.Services.Feeds;
 public sealed class FeedAdministrationService : IFeedAdministrationService
 {
     private readonly AppDataService _data;
-    private readonly IFeedImportService _feedImportService;
+    private readonly FeedImportServiceResolver _feedImportResolver;
     private readonly ILogger<FeedAdministrationService> _logger;
     private readonly IAnalysisLog _analysisLog;
 
     public FeedAdministrationService(
         AppDataService data,
-        IFeedImportService feedImportService,
+        FeedImportServiceResolver feedImportResolver,
         ILogger<FeedAdministrationService> logger,
         IAnalysisLog analysisLog)
     {
         _data = data;
-        _feedImportService = feedImportService;
+        _feedImportResolver = feedImportResolver;
         _logger = logger;
         _analysisLog = analysisLog;
     }
@@ -44,16 +44,12 @@ public sealed class FeedAdministrationService : IFeedAdministrationService
         var package = packages.FirstOrDefault(x => string.Equals(x.Id, id, StringComparison.Ordinal))
             ?? throw new InvalidOperationException("Feed package was not found.");
 
-        if (package.FeedType != FeedType.NuGet)
-        {
-            throw new InvalidOperationException($"Feed type '{package.FeedType}' is not supported yet.");
-        }
-
         var chosenVersion = targetVersion;
         if (string.IsNullOrWhiteSpace(chosenVersion))
         {
-            var versionResponse = await _feedImportService.GetAvailableVersionsAsync(package.PackageId, ct);
-            chosenVersion = versionResponse.Versions.LastOrDefault();
+            var importService = _feedImportResolver.GetRequired(package.FeedType);
+            var versionResponse = await importService.GetAvailableVersionsAsync(package.PackageId, ct);
+            chosenVersion = versionResponse.LatestVersion ?? versionResponse.Versions.LastOrDefault();
         }
 
         if (string.IsNullOrWhiteSpace(chosenVersion))
@@ -90,8 +86,9 @@ public sealed class FeedAdministrationService : IFeedAdministrationService
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
-        var updated = await _feedImportService.ImportAsync(new NuGetFeedImportRequest
+        var updated = await _feedImportResolver.GetRequired(package.FeedType).ImportAsync(new FeedPackageImportRequest
         {
+            FeedType = package.FeedType,
             PackageId = package.PackageId,
             Version = chosenVersion,
             ComponentId = linkedComponentIds.FirstOrDefault()
@@ -122,7 +119,7 @@ public sealed class FeedAdministrationService : IFeedAdministrationService
             if (changed)
             {
                 await _data.SaveComponentFeedPackageLinksAsync(refreshedLinks, ct);
-                return (await GetPackagesAsync(FeedType.NuGet, ct)).First(x => x.Id == updated.Id);
+                return (await GetPackagesAsync(package.FeedType, ct)).First(x => x.Id == updated.Id);
             }
         }
 
@@ -251,12 +248,19 @@ public sealed class FeedAdministrationService : IFeedAdministrationService
             package.FeedType);
     }
 
-    public async Task<(string FilePath, string DownloadFileName)?> GetNuGetPackageFileAsync(string packageId, string version, CancellationToken ct = default)
+    public async Task<(string FilePath, string DownloadFileName)?> GetPackageFileAsync(FeedType feedType, string packageId, string version, string? fileName = null, CancellationToken ct = default)
     {
-        var normalizedPackageId = NuGetPackageSourceClient.NormalizePackageId(packageId);
+        var normalizedPackageId = feedType switch
+        {
+            FeedType.NuGet => NuGetPackageSourceClient.NormalizePackageId(packageId),
+            FeedType.Npm => NpmPackageSourceClient.NormalizePackageId(packageId),
+            FeedType.Python => PyPiPackageSourceClient.NormalizePackageId(packageId),
+            FeedType.Maven => MavenPackageSourceClient.NormalizePackageId(packageId),
+            _ => packageId.Trim()
+        };
         var packages = await _data.GetFeedPackagesAsync(ct);
         var match = packages.FirstOrDefault(x =>
-            x.FeedType == FeedType.NuGet &&
+            x.FeedType == feedType &&
             string.Equals(x.NormalizedPackageId, normalizedPackageId, StringComparison.Ordinal) &&
             string.Equals(x.Version, version, StringComparison.OrdinalIgnoreCase));
 
@@ -265,16 +269,36 @@ public sealed class FeedAdministrationService : IFeedAdministrationService
             return null;
         }
 
-        return (match.FilePath, $"{match.PackageId}.{match.Version}.nupkg");
+        if (!string.IsNullOrWhiteSpace(fileName))
+        {
+            var versionDirectory = Path.GetDirectoryName(match.FilePath);
+            if (!string.IsNullOrWhiteSpace(versionDirectory))
+            {
+                var requestedPath = Path.Combine(versionDirectory, Path.GetFileName(fileName));
+                if (File.Exists(requestedPath))
+                {
+                    return (requestedPath, Path.GetFileName(requestedPath));
+                }
+            }
+        }
+
+        return (match.FilePath, Path.GetFileName(match.FilePath));
     }
 
-    public async Task<List<string>> GetHostedNuGetVersionsAsync(string packageId, CancellationToken ct = default)
+    public async Task<List<string>> GetHostedVersionsAsync(FeedType feedType, string packageId, CancellationToken ct = default)
     {
-        var normalizedPackageId = NuGetPackageSourceClient.NormalizePackageId(packageId);
+        var normalizedPackageId = feedType switch
+        {
+            FeedType.NuGet => NuGetPackageSourceClient.NormalizePackageId(packageId),
+            FeedType.Npm => NpmPackageSourceClient.NormalizePackageId(packageId),
+            FeedType.Python => PyPiPackageSourceClient.NormalizePackageId(packageId),
+            FeedType.Maven => MavenPackageSourceClient.NormalizePackageId(packageId),
+            _ => packageId.Trim()
+        };
         var packages = await _data.GetFeedPackagesAsync(ct);
 
         return packages
-            .Where(x => x.FeedType == FeedType.NuGet && string.Equals(x.NormalizedPackageId, normalizedPackageId, StringComparison.Ordinal))
+            .Where(x => x.FeedType == feedType && string.Equals(x.NormalizedPackageId, normalizedPackageId, StringComparison.Ordinal))
             .Select(x => x.Version)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
